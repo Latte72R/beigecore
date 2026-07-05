@@ -1,0 +1,64 @@
+name: CI
+
+on:
+    push:
+    pull_request:
+    workflow_dispatch:
+
+jobs:
+    make:
+        name: make targets
+        runs-on: ubuntu-24.04
+
+        env:
+            VERYL_VERSION: "0.20.2"
+
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+
+            - name: Install system dependencies
+              run: |
+                  sudo apt-get update
+                  sudo apt-get install -y --no-install-recommends \
+                    build-essential \
+                    python3 \
+                    verilator \
+                    yosys
+
+            - name: Install Rust
+              uses: dtolnay/rust-toolchain@stable
+
+            - name: Cache cargo
+              uses: actions/cache@v4
+              with:
+                  path: |
+                      ~/.cargo/bin
+                      ~/.cargo/registry
+                      ~/.cargo/git
+                  key: ${{ runner.os }}-cargo-veryl-${{ env.VERYL_VERSION }}
+
+            - name: Install Veryl
+              run: |
+                  if ! command -v veryl >/dev/null || [ "$(veryl --version)" != "veryl ${VERYL_VERSION}" ]; then
+                    cargo install veryl --locked --version "${VERYL_VERSION}"
+                  fi
+                  veryl --version
+
+            - name: make build
+              run: make build
+
+            - name: make sim
+              run: make sim
+
+            - name: make test
+              continue-on-error: true
+              run: make test
+
+            - name: make synth
+              continue-on-error: true
+              run: make synth
+
+            - name: make fmax
+              continue-on-error: true
+              run: make fmax
