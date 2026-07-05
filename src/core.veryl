@@ -163,7 +163,11 @@ module core (
     var ids_ctrl     : InstCtrl;
     var ids_imm      : UIntX   ;
 
-    inst decoder: inst_decoder ( bits: ids_inst_bits, ctrl: ids_ctrl, imm: ids_imm );
+    inst decoder: inst_decoder (
+        bits: ids_inst_bits,
+        ctrl: ids_ctrl     ,
+        imm : ids_imm      ,
+    );
 
     always_comb {
         // ID -> EX
@@ -224,10 +228,20 @@ module core (
         }
     }
 
-    inst alum: alu ( ctrl: exs_ctrl, op1: exs_op1, op2: exs_op2, result: exs_alu_result );
+    inst alum: alu (
+        ctrl  : exs_ctrl      ,
+        op1   : exs_op1       ,
+        op2   : exs_op2       ,
+        result: exs_alu_result,
+    );
 
     var exs_brunit_take: logic;
-    inst bru: brunit ( funct3: exs_ctrl.funct3, op1: exs_op1, op2: exs_op2, take: exs_brunit_take );
+    inst bru: brunit (
+        funct3: exs_ctrl.funct3,
+        op1   : exs_op1        ,
+        op2   : exs_op2        ,
+        take  : exs_brunit_take,
+    );
 
     always_comb {
         // EX -> MEM
