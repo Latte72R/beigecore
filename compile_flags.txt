@@ -1,7 +1,0 @@
--std=c++17
--I
-/home/latte/core/obj_dir
--I
-/usr/share/verilator/include
--I
-/usr/share/verilator/include/vltstd
