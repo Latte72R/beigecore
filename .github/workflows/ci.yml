@@ -22,27 +22,22 @@ jobs:
                   sudo apt-get update
                   sudo apt-get install -y --no-install-recommends \
                     build-essential \
+                    curl \
+                    unzip \
                     python3 \
                     verilator \
                     yosys
 
-            - name: Install Rust
-              uses: dtolnay/rust-toolchain@stable
-
-            - name: Cache cargo
-              uses: actions/cache@v4
-              with:
-                  path: |
-                      ~/.cargo/bin
-                      ~/.cargo/registry
-                      ~/.cargo/git
-                  key: ${{ runner.os }}-cargo-veryl-${{ env.VERYL_VERSION }}
-
             - name: Install Veryl
               run: |
-                  if ! command -v veryl >/dev/null || [ "$(veryl --version)" != "veryl ${VERYL_VERSION}" ]; then
-                    cargo install veryl --locked --version "${VERYL_VERSION}"
-                  fi
+                  curl -fsSL \
+                    "https://github.com/veryl-lang/veryl/releases/download/v${VERYL_VERSION}/veryl-x86_64-linux.zip" \
+                    -o veryl.zip
+                  unzip -q veryl.zip -d veryl-dist
+                  mkdir -p "${HOME}/.local/bin"
+                  install -m 0755 "$(find veryl-dist -type f -name veryl -print -quit)" "${HOME}/.local/bin/veryl"
+                  echo "${HOME}/.local/bin" >> "${GITHUB_PATH}"
+                  export PATH="${HOME}/.local/bin:${PATH}"
                   veryl --version
 
             - name: make build
