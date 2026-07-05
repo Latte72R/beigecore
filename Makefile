@@ -6,8 +6,9 @@ TB := src/tb_verilator.cpp
 OBJ_DIR := obj_dir
 SIM := sim
 
-VERILATOR_FLAGS ?=
+VERILATOR_FLAGS ?= -DTEST_MODE
 VERILATOR_CPPFLAGS := $(filter -D%,$(VERILATOR_FLAGS))
+VERYL_SRCS := $(wildcard src/*.veryl)
 
 SYNTH_TOP ?= core
 TIMING_PATHS ?= 10
@@ -26,11 +27,15 @@ build: ## Format and build Veryl sources
 	veryl fmt
 	veryl build
 
+$(FILELIST): $(VERYL_SRCS) Veryl.toml Veryl.lock
+	veryl fmt
+	veryl build
+
 clean: ## Clean generated files
 	veryl clean
 	rm -rf $(OBJ_DIR)
 
-sim: ## Build the Verilator simulator
+$(OBJ_DIR)/$(SIM): $(FILELIST) $(TB) Makefile
 	verilator --cc $(VERILATOR_FLAGS) \
 		$(if $(VERILATOR_CPPFLAGS),-CFLAGS "$(VERILATOR_CPPFLAGS)") \
 		-f $(FILELIST) \
@@ -40,7 +45,9 @@ sim: ## Build the Verilator simulator
 	$(MAKE) -C $(OBJ_DIR) -f V$(PROJECT)_$(SIM_TOP).mk
 	mv $(OBJ_DIR)/V$(PROJECT)_$(SIM_TOP) $(OBJ_DIR)/$(SIM)
 
-test: ## Run tests with the built simulator
+sim: $(OBJ_DIR)/$(SIM) ## Build the Verilator simulator
+
+test: $(OBJ_DIR)/$(SIM) ## Run tests with the built simulator
 	python3 test/test.py -r $(OBJ_DIR)/$(SIM) $(TEST_DIR) $(TEST_FILTER)
 
 synth: ## Run synthesis and dump timing/area reports
