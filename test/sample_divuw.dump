@@ -1,0 +1,39 @@
+
+/tmp/sample_divuw:     file format elf64-littleriscv
+
+
+Disassembly of section .text:
+
+0000000000000000 <_start>:
+   0:	00200193          	li	gp,2
+   4:	0010059b          	addiw	a1,zero,1
+   8:	02059593          	slli	a1,a1,0x20
+   c:	00658593          	addi	a1,a1,6
+  10:	00300613          	li	a2,3
+  14:	02c5d6bb          	divuw	a3,a1,a2
+  18:	00200293          	li	t0,2
+  1c:	02569463          	bne	a3,t0,44 <fail>
+  20:	00300193          	li	gp,3
+  24:	0010059b          	addiw	a1,zero,1
+  28:	01f59593          	slli	a1,a1,0x1f
+  2c:	00100613          	li	a2,1
+  30:	02c5d6bb          	divuw	a3,a1,a2
+  34:	800002b7          	lui	t0,0x80000
+  38:	00569663          	bne	a3,t0,44 <fail>
+
+000000000000003c <pass>:
+  3c:	00100193          	li	gp,1
+  40:	00c0006f          	j	4c <write_tohost>
+
+0000000000000044 <fail>:
+  44:	00119193          	slli	gp,gp,0x1
+  48:	0011e193          	ori	gp,gp,1
+
+000000000000004c <write_tohost>:
+  4c:	00000297          	auipc	t0,0x0
+  50:	0032a623          	sw	gp,12(t0) # 58 <tohost>
+  54:	0000006f          	j	54 <write_tohost+0x8>
+
+0000000000000058 <tohost>:
+	...
+  60:	00000013          	nop
