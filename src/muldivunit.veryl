@@ -206,40 +206,121 @@ module mulunit #(
         AddLoop,
         Finish,
     }
+    const STEP: u32 = 32;
 
-    var state  : State           ;
-    var op1zext: logic<WIDTH * 2>;
-    var op2zext: logic<WIDTH * 2>;
+    var state       : State           ;
+    var op1zext     : logic<WIDTH * 2>;
+    var op2zext     : logic<WIDTH * 2>;
+    var result_sum  : logic<WIDTH * 2>;
+    var result_carry: logic<WIDTH * 2>;
+
+    var partial_sum  : logic<WIDTH * 2>;
+    var partial_carry: logic<WIDTH * 2>;
+    var add_count    : logic<32>       ;
+
+    var level_a: logic<WIDTH * 2> [34];
+    var level_b: logic<WIDTH * 2> [23];
+
+    function csa_sum (
+        a: input logic<WIDTH * 2>,
+        b: input logic<WIDTH * 2>,
+        c: input logic<WIDTH * 2>,
+    ) -> logic<WIDTH * 2> {
+        return a ^ b ^ c;
+    }
+
+    function csa_carry (
+        a: input logic<WIDTH * 2>,
+        b: input logic<WIDTH * 2>,
+        c: input logic<WIDTH * 2>,
+    ) -> logic<WIDTH * 2> {
+        return ((a & b) | (b & c) | (a & c)) << 1;
+    }
 
     always_comb {
         rvalid = state == State::Finish;
+
+        for i in 0..32 {
+            level_a[i] = if op2zext[i] ? op1zext << i : 0;
+        }
+        level_a[32] = result_sum;
+        level_a[33] = result_carry;
+
+        for i in 0..11 {
+            level_b[i * 2]     = csa_sum(level_a[i * 3], level_a[i * 3 + 1], level_a[i * 3 + 2]);
+            level_b[i * 2 + 1] = csa_carry(level_a[i * 3], level_a[i * 3 + 1], level_a[i * 3 + 2]);
+        }
+        level_b[22] = level_a[33];
+
+        for i in 0..7 {
+            level_a[i * 2]     = csa_sum(level_b[i * 3], level_b[i * 3 + 1], level_b[i * 3 + 2]);
+            level_a[i * 2 + 1] = csa_carry(level_b[i * 3], level_b[i * 3 + 1], level_b[i * 3 + 2]);
+        }
+        level_a[14] = level_b[21];
+        level_a[15] = level_b[22];
+
+        for i in 0..5 {
+            level_b[i * 2]     = csa_sum(level_a[i * 3], level_a[i * 3 + 1], level_a[i * 3 + 2]);
+            level_b[i * 2 + 1] = csa_carry(level_a[i * 3], level_a[i * 3 + 1], level_a[i * 3 + 2]);
+        }
+        level_b[10] = level_a[15];
+
+        for i in 0..3 {
+            level_a[i * 2]     = csa_sum(level_b[i * 3], level_b[i * 3 + 1], level_b[i * 3 + 2]);
+            level_a[i * 2 + 1] = csa_carry(level_b[i * 3], level_b[i * 3 + 1], level_b[i * 3 + 2]);
+        }
+        level_a[6] = level_b[9];
+        level_a[7] = level_b[10];
+
+        for i in 0..2 {
+            level_b[i * 2]     = csa_sum(level_a[i * 3], level_a[i * 3 + 1], level_a[i * 3 + 2]);
+            level_b[i * 2 + 1] = csa_carry(level_a[i * 3], level_a[i * 3 + 1], level_a[i * 3 + 2]);
+        }
+        level_b[4] = level_a[6];
+        level_b[5] = level_a[7];
+
+        for i in 0..2 {
+            level_a[i * 2]     = csa_sum(level_b[i * 3], level_b[i * 3 + 1], level_b[i * 3 + 2]);
+            level_a[i * 2 + 1] = csa_carry(level_b[i * 3], level_b[i * 3 + 1], level_b[i * 3 + 2]);
+        }
+
+        level_b[0] = csa_sum(level_a[0], level_a[1], level_a[2]);
+        level_b[1] = csa_carry(level_a[0], level_a[1], level_a[2]);
+        level_b[2] = level_a[3];
+
+        partial_sum   = csa_sum(level_b[0], level_b[1], level_b[2]);
+        partial_carry = csa_carry(level_b[0], level_b[1], level_b[2]);
     }
 
-    var add_count: logic<32>;
     always_ff {
         if_reset {
-            state     = State::Idle;
-            result    = 0;
-            add_count = 0;
-            op1zext   = 0;
-            op2zext   = 0;
+            state        = State::Idle;
+            result       = 0;
+            result_sum   = 0;
+            result_carry = 0;
+            add_count    = 0;
+            op1zext      = 0;
+            op2zext      = 0;
         } else {
             case state {
                 State::Idle   : if valid {
-                    state     = State::AddLoop;
-                    result    = 0;
-                    add_count = 0;
-                    op1zext   = {1'b0 repeat WIDTH, op1};
-                    op2zext   = {1'b0 repeat WIDTH, op2};
+                    state        = State::AddLoop;
+                    result       = 0;
+                    result_sum   = 0;
+                    result_carry = 0;
+                    add_count    = 0;
+                    op1zext      = {1'b0 repeat WIDTH, op1};
+                    op2zext      = {1'b0 repeat WIDTH, op2};
                 }
                 State::AddLoop: if add_count == WIDTH {
-                    state = State::Finish;
+                    state  = State::Finish;
+                    result = result_sum + result_carry;
                 } else {
-                    if op2zext[add_count] {
-                        result += op1zext;
-                    }
-                    op1zext   <<= 1;
-                    add_count +=  1;
+                    result_sum   =   partial_sum;
+                    result_carry =   partial_carry;
+                    op1zext      <<= STEP;
+                    op2zext      >>= STEP;
+                    add_count    +=  STEP;
                 }
                 State::Finish : state = State::Idle;
                 default       : {}
@@ -260,19 +341,37 @@ module divunit #(
     quotient : output logic<WIDTH>,
     remainder: output logic<WIDTH>,
 ) {
+    const STEP: u32 = 2;
+
     enum State {
         Idle,
         ZeroCheck,
         SubLoop,
         Finish,
     }
+
     var state         : State           ;
     var dividend_saved: logic<WIDTH * 2>;
     var divisor_saved : logic<WIDTH * 2>;
+    var next_dividend : logic<WIDTH * 2>;
+    var next_divisor  : logic<WIDTH * 2>;
+    var next_quotient : logic<WIDTH>    ;
+
     always_comb {
         rvalid    = state == State::Finish;
         remainder = dividend_saved[WIDTH - 1:0];
+
+        let qbit0          : logic            = dividend_saved >= divisor_saved;
+        let dividend_after0: logic<WIDTH * 2> = if qbit0 ? dividend_saved - divisor_saved : dividend_saved;
+        let divisor_after0 : logic<WIDTH * 2> = divisor_saved >> 1;
+        let qbit1          : logic            = dividend_after0 >= divisor_after0;
+        let dividend_after1: logic<WIDTH * 2> = if qbit1 ? dividend_after0 - divisor_after0 : dividend_after0;
+
+        next_dividend = dividend_after1;
+        next_divisor  = divisor_saved >> STEP;
+        next_quotient = (quotient << STEP) + {1'b0 repeat WIDTH - STEP, qbit0, qbit1};
     }
+
     var sub_count: u32;
     always_ff {
         if_reset {
@@ -299,14 +398,10 @@ module divunit #(
                 State::SubLoop  : if sub_count == WIDTH {
                     state = State::Finish;
                 } else {
-                    if dividend_saved >= divisor_saved {
-                        dividend_saved -= divisor_saved;
-                        quotient       =  (quotient << 1) + 1;
-                    } else {
-                        quotient <<= 1;
-                    }
-                    divisor_saved >>= 1;
-                    sub_count     +=  1;
+                    dividend_saved =  next_dividend;
+                    divisor_saved  =  next_divisor;
+                    quotient       =  next_quotient;
+                    sub_count      += STEP;
                 }
                 State::Finish   : state = State::Idle;
                 default         : {}
