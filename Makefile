@@ -33,7 +33,7 @@ clean: ## Clean generated files
 	veryl clean
 	rm -rf $(OBJ_DIR)
 
-$(OBJ_DIR)/$(SIM): $(FILELIST) $(TB) Makefile
+$(OBJ_DIR)/$(SIM): $(FILELIST) $(VERYL_SRCS) $(TB) Makefile
 	verilator --cc $(VERILATOR_FLAGS) \
 		$(if $(VERILATOR_CPPFLAGS),-CFLAGS "$(VERILATOR_CPPFLAGS)") \
 		-f $(FILELIST) \
