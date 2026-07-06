@@ -8,7 +8,7 @@ parser.add_argument("files", nargs='*', help="test hex file names")
 parser.add_argument("-r", "--recursive", action='store_true', help="search file recursively")
 parser.add_argument("-e", "--extension", default="hex", help="test file extension")
 parser.add_argument("-o", "--output_dir", default="results", help="result output directory")
-parser.add_argument("-t", "--time_limit", type=float, default=10, help="limit of execution time. set 0 to nolimit")
+parser.add_argument("-t", "--time_limit", type=float, default=2, help="limit of execution time. set 0 to nolimit")
 args = parser.parse_args()
 # run test
 def test(file_name):

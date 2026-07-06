@@ -14,7 +14,7 @@ SYNTH_TOP ?= core
 TIMING_PATHS ?= 10
 
 TEST_DIR ?= test/share
-TEST_FILTER ?= rv64ui-p-
+TEST_FILTER ?= rv64ui-p- rv64um-p-
 
 .DEFAULT_GOAL := help
 
@@ -23,9 +23,7 @@ TEST_FILTER ?= rv64ui-p-
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*?## "}; /^[a-zA-Z_-]+:.*?## / {printf "\033[36m%-12s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
-build: ## Format and build Veryl sources
-	veryl fmt
-	veryl build
+build: $(FILELIST) ## Format and build Veryl sources
 
 $(FILELIST): $(VERYL_SRCS) Veryl.toml Veryl.lock
 	veryl fmt
@@ -48,7 +46,12 @@ $(OBJ_DIR)/$(SIM): $(FILELIST) $(TB) Makefile
 sim: $(OBJ_DIR)/$(SIM) ## Build the Verilator simulator
 
 test: $(OBJ_DIR)/$(SIM) ## Run tests with the built simulator
-	python3 test/test.py -r $(OBJ_DIR)/$(SIM) $(TEST_DIR) $(TEST_FILTER)
+	@status=0; \
+	for filter in $(TEST_FILTER); do \
+		echo "== $$filter =="; \
+		python3 test/test.py -r -o results/$$filter $(OBJ_DIR)/$(SIM) $(TEST_DIR) $$filter || status=$$?; \
+	done; \
+	exit $$status
 
 synth: ## Run synthesis and dump timing/area reports
 	veryl synth --top $(SYNTH_TOP) \
