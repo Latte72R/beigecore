@@ -27,6 +27,8 @@ jobs:
                     curl \
                     unzip \
                     python3 \
+                    gcc-riscv64-unknown-elf \
+                    binutils-riscv64-unknown-elf \
                     verilator \
                     yosys
 
@@ -51,6 +53,10 @@ jobs:
             - name: make test
               continue-on-error: true
               run: make test
+
+            - name: make bench
+              continue-on-error: true
+              run: make bench COREMARK_ITERATIONS=1 COREMARK_CYCLES=20000000
 
             - name: make synth
               continue-on-error: true
