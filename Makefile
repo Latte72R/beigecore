@@ -13,12 +13,18 @@ VERYL_SRCS := $(wildcard src/*.veryl)
 SYNTH_TOP ?= core
 TIMING_PATHS ?= 10
 
-TEST_DIR ?= test/share
-TEST_FILTER ?= rv64ui-p- rv64um-p-
+RV_TEST_DIR ?= test/share/riscv-tests
+RV_TEST_FILTER ?= rv64ui-p- rv64um-p-
+
+COREMARK_DIR ?= test/share/coremark
+COREMARK_ITERATIONS ?= 1
+COREMARK_CYCLES ?= 0
+COREMARK_RESULT ?= results/coremark.txt
+COREMARK_HEX ?= $(COREMARK_DIR)/build/coremark.riscv.bin.hex
 
 .DEFAULT_GOAL := help
 
-.PHONY: help build clean sim test synth fmax
+.PHONY: help build clean sim test bench synth fmax
 
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*?## "}; /^[a-zA-Z_-]+:.*?## / {printf "\033[36m%-12s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -47,10 +53,22 @@ sim: $(OBJ_DIR)/$(SIM) ## Build the Verilator simulator
 
 test: $(OBJ_DIR)/$(SIM) ## Run tests with the built simulator
 	@status=0; \
-	for filter in $(TEST_FILTER); do \
+	for filter in $(RV_TEST_FILTER); do \
 		echo "== $$filter =="; \
-		python3 test/test.py -r -o results/$$filter $(OBJ_DIR)/$(SIM) $(TEST_DIR) $$filter || status=$$?; \
+		python3 test/test.py -r -o results/$$filter $(OBJ_DIR)/$(SIM) $(RV_TEST_DIR) $$filter || status=$$?; \
 	done; \
+	exit $$status
+
+bench: $(OBJ_DIR)/$(SIM) ## Build and run CoreMark
+	@test -f "$(COREMARK_DIR)/core_main.c" || { \
+		echo "CoreMark submodule is missing. Run: git submodule update --init --recursive"; \
+		exit 1; \
+	}
+	$(MAKE) -C $(COREMARK_DIR) coremark COREMARK_ITERATIONS=$(COREMARK_ITERATIONS)
+	@mkdir -p $(dir $(COREMARK_RESULT))
+	@$(OBJ_DIR)/$(SIM) $(COREMARK_HEX) $(COREMARK_CYCLES) > $(COREMARK_RESULT); \
+	status=$$?; \
+	tail -n 5 $(COREMARK_RESULT); \
 	exit $$status
 
 synth: ## Run synthesis and dump timing/area reports

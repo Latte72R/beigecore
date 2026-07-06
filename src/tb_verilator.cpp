@@ -85,12 +85,15 @@ int main(int argc, char **argv) {
 
   // loop
   dut->rst = 1;
+  unsigned long long executed_cycles = 0;
   for (long long i = 0;
        !Verilated::gotFinish() && (cycles == 0 || i / 2 < cycles); i++) {
     dut->clk = !dut->clk;
     dut->eval();
+    executed_cycles = i / 2;
   }
   dut->final();
+  std::cout << "cycles: " << executed_cycles << std::endl;
 
 #ifdef TEST_MODE
   return dut->test_success != 1;

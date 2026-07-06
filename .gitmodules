@@ -1,3 +1,6 @@
 [submodule "test/share/riscv-tests"]
 	path = test/share/riscv-tests
 	url = https://github.com/Latte72R/riscv-tests
+[submodule "test/share/coremark"]
+	path = test/share/coremark
+	url = https://github.com/Latte72R/coremark
