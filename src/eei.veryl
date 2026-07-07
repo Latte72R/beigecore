@@ -25,6 +25,7 @@ package eei {
     const OP_OP_32    : logic<7> = 7'b0111011;
     const OP_OP_IMM_32: logic<7> = 7'b0011011;
     const OP_SYSTEM   : logic<7> = 7'b1110011;
+    const OP_MISC_MEM : logic<7> = 7'b0001111;
 
     type SIntX  = signed logic<XLEN>;
     type SInt32 = signed logic<32>  ;
@@ -32,7 +33,11 @@ package eei {
 
     // CSRの原因
     enum CsrCause: UIntX {
+        INSTRUCTION_ADDRESS_MISALIGNED = 0,
+        ILLEGAL_INSTRUCTION = 2,
         BREAKPOINT = 3,
+        LOAD_ADDRESS_MISALIGNED = 4,
+        STORE_AMO_ADDRESS_MISALIGNED = 6,
         ENVIRONMENT_CALL_FROM_M_MODE = 11,
     }
 
