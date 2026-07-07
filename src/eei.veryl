@@ -29,4 +29,19 @@ package eei {
     type SIntX  = signed logic<XLEN>;
     type SInt32 = signed logic<32>  ;
     type SInt64 = signed logic<64>  ;
+
+    // CSRの原因
+    enum CsrCause: UIntX {
+        BREAKPOINT = 3,
+        ENVIRONMENT_CALL_FROM_M_MODE = 11,
+    }
+
+    // CSRのアドレス
+    enum CsrAddr: logic<12> {
+        MTVEC = 12'h305,
+        MEPC = 12'h341,
+        MCAUSE = 12'h342,
+        MTVAL = 12'h343,
+        LED = 12'h800,
+    }
 }

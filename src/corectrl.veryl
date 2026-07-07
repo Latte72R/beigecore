@@ -1,4 +1,5 @@
 import eei::*;
+
 package corectrl {
     // 命令形式を表す列挙型
     enum InstType: logic<6> {
@@ -23,6 +24,13 @@ package corectrl {
         is_csr   : logic      , // CSR命令である
         funct3   : logic   <3>, // 命令のfunct3フィールド
         funct7   : logic   <7>, // 命令のfunct7フィールド
+    }
+
+    // 例外の情報を保存するための型
+    struct ExceptionInfo {
+        valid: logic   ,
+        cause: CsrCause,
+        value: UIntX   ,
     }
 
     // 命令がメモリにアクセスする命令か判別する関数
