@@ -1,0 +1,102 @@
+
+/tmp/sample_exception:     file format elf64-littleriscv
+
+
+Disassembly of section .text:
+
+0000000000000000 <_start>:
+   0:	00000297          	auipc	t0,0x0
+   4:	0e028293          	addi	t0,t0,224 # e0 <trap_handler>
+   8:	30529073          	csrw	mtvec,t0
+   c:	00100413          	li	s0,1
+  10:	00300493          	li	s1,3
+  14:	00000917          	auipc	s2,0x0
+  18:	01090913          	addi	s2,s2,16 # 24 <ebreak_test>
+  1c:	00000997          	auipc	s3,0x0
+  20:	00898993          	addi	s3,s3,8 # 24 <ebreak_test>
+
+0000000000000024 <ebreak_test>:
+  24:	00100073          	ebreak
+  28:	00200413          	li	s0,2
+  2c:	00200493          	li	s1,2
+  30:	00000917          	auipc	s2,0x0
+  34:	00c90913          	addi	s2,s2,12 # 3c <illegal_test>
+  38:	00000993          	li	s3,0
+
+000000000000003c <illegal_test>:
+  3c:	00000000          	.word	0x00000000
+  40:	00300413          	li	s0,3
+  44:	00200493          	li	s1,2
+  48:	00000917          	auipc	s2,0x0
+  4c:	01890913          	addi	s2,s2,24 # 60 <readonly_csr_test>
+  50:	000c09b7          	lui	s3,0xc0
+  54:	0019899b          	addiw	s3,s3,1 # c0001 <__global_pointer$+0xbe6e9>
+  58:	00c99993          	slli	s3,s3,0xc
+  5c:	07398993          	addi	s3,s3,115
+
+0000000000000060 <readonly_csr_test>:
+  60:	c0001073          	unimp
+  64:	00400413          	li	s0,4
+  68:	00000493          	li	s1,0
+  6c:	00000917          	auipc	s2,0x0
+  70:	01890913          	addi	s2,s2,24 # 84 <inst_misaligned_test>
+  74:	00000997          	auipc	s3,0x0
+  78:	09298993          	addi	s3,s3,146 # 106 <aligned_target+0x2>
+  7c:	00000297          	auipc	t0,0x0
+  80:	08a28293          	addi	t0,t0,138 # 106 <aligned_target+0x2>
+
+0000000000000084 <inst_misaligned_test>:
+  84:	00028067          	jr	t0
+  88:	00500413          	li	s0,5
+  8c:	00400493          	li	s1,4
+  90:	00000917          	auipc	s2,0x0
+  94:	01090913          	addi	s2,s2,16 # a0 <load_misaligned_test>
+  98:	00000997          	auipc	s3,0x0
+  9c:	07198993          	addi	s3,s3,113 # 109 <data_area+0x1>
+
+00000000000000a0 <load_misaligned_test>:
+  a0:	0009a303          	lw	t1,0(s3)
+  a4:	00600413          	li	s0,6
+  a8:	00600493          	li	s1,6
+  ac:	00000917          	auipc	s2,0x0
+  b0:	01090913          	addi	s2,s2,16 # bc <store_misaligned_test>
+  b4:	00000997          	auipc	s3,0x0
+  b8:	05698993          	addi	s3,s3,86 # 10a <data_area+0x2>
+
+00000000000000bc <store_misaligned_test>:
+  bc:	0069a023          	sw	t1,0(s3)
+
+00000000000000c0 <pass>:
+  c0:	00100193          	li	gp,1
+  c4:	00c0006f          	j	d0 <write_tohost>
+
+00000000000000c8 <fail>:
+  c8:	00141193          	slli	gp,s0,0x1
+  cc:	0011e193          	ori	gp,gp,1
+
+00000000000000d0 <write_tohost>:
+  d0:	00000297          	auipc	t0,0x0
+  d4:	04028293          	addi	t0,t0,64 # 110 <tohost>
+  d8:	0032a023          	sw	gp,0(t0)
+  dc:	0000006f          	j	dc <write_tohost+0xc>
+
+00000000000000e0 <trap_handler>:
+  e0:	342022f3          	csrr	t0,mcause
+  e4:	fe9292e3          	bne	t0,s1,c8 <fail>
+  e8:	341022f3          	csrr	t0,mepc
+  ec:	fd229ee3          	bne	t0,s2,c8 <fail>
+  f0:	343022f3          	csrr	t0,mtval
+  f4:	fd329ae3          	bne	t0,s3,c8 <fail>
+  f8:	00490293          	addi	t0,s2,4
+  fc:	34129073          	csrw	mepc,t0
+ 100:	30200073          	mret
+
+0000000000000104 <aligned_target>:
+ 104:	00000000          	.word	0x00000000
+
+0000000000000108 <data_area>:
+ 108:	44556677          	.insn	4, 0x44556677
+ 10c:	00112233          	slt	tp,sp,ra
+
+0000000000000110 <tohost>:
+	...

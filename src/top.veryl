@@ -81,7 +81,7 @@ module top #(
                         $display("riscv-tests success!");
                     } else {
                         $display("riscv-tests failed!");
-                        $error  ("wdata : %h", d_membus.wdata);
+                        $error("wdata : %h", d_membus.wdata);
                     }
                     $finish();
                 }
