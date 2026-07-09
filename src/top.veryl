@@ -1,4 +1,5 @@
 import eei::*;
+
 module top #(
     param MEMORY_FILEPATH_IS_ENV: bit    = 1                 ,
     param MEMORY_FILEPATH       : string = "MEMORY_FILE_PATH",
@@ -6,9 +7,10 @@ module top #(
     #[ifdef(TEST_MODE)]
     test_success: output bit,
     #[ifdef(TEST_MODE)]
-    test_tohost_addr: input Addr ,
-    clk             : input clock,
-    rst             : input reset,
+    test_tohost_addr: input  Addr ,
+    clk             : input  clock,
+    rst             : input  reset,
+    led             : output UIntX,
 ) {
     // アドレスをメモリのデータ単位でのアドレスに変換する
     function addr_to_memaddr (
@@ -69,7 +71,7 @@ module top #(
         membus  ,
     );
 
-    inst c: core ( clk, rst, i_membus, d_membus );
+    inst c: core ( clk, rst, i_membus, d_membus, led );
 
     #[ifdef(TEST_MODE)]
     always_ff {
