@@ -1,9 +1,13 @@
 #include "Vcore_top.h"
+#include <cstdio>
+#include <fcntl.h>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <signal.h>
 #include <stdlib.h>
 #include <string>
+#include <termios.h>
 #include <verilated.h>
 
 namespace fs = std::filesystem;
@@ -15,6 +19,56 @@ extern "C" const char *get_env_value(const char *key) {
   return value;
 }
 
+extern "C" const unsigned long long get_input_dpic() {
+  unsigned char c = 0;
+  ssize_t bytes_read = read(STDIN_FILENO, &c, 1);
+
+  if (bytes_read == 1) {
+    return static_cast<unsigned long long>(c) | (0x01010ULL << 44);
+  }
+  return 0;
+}
+
+struct termios old_setting;
+
+void restore_termios_setting(void) {
+  tcsetattr(STDIN_FILENO, TCSANOW, &old_setting);
+}
+
+void sighandler(int signum) {
+  restore_termios_setting();
+  exit(signum);
+}
+
+void set_nonblocking(void) {
+  struct termios new_setting;
+
+  if (tcgetattr(STDIN_FILENO, &old_setting) == -1) {
+    perror("tcgetattr");
+    return;
+  }
+  new_setting = old_setting;
+  new_setting.c_lflag &= ~(ICANON | ECHO);
+  if (tcsetattr(STDIN_FILENO, TCSANOW, &new_setting) == -1) {
+    perror("tcsetattr");
+    return;
+  }
+  signal(SIGINT, sighandler);
+  signal(SIGTERM, sighandler);
+  signal(SIGQUIT, sighandler);
+  atexit(restore_termios_setting);
+
+  int flags = fcntl(STDIN_FILENO, F_GETFL, 0);
+  if (flags == -1) {
+    perror("fcntl(F_GETFL)");
+    return;
+  }
+  if (fcntl(STDIN_FILENO, F_SETFL, flags | O_NONBLOCK) == -1) {
+    perror("fcntl(F_SETFL)");
+    return;
+  }
+}
+
 int main(int argc, char **argv) {
   Verilated::commandArgs(argc, argv);
   if (argc < 3) {
@@ -22,6 +76,11 @@ int main(int argc, char **argv) {
               << std::endl;
     return 1;
   }
+
+#ifdef ENABLE_DEBUG_INPUT
+  std::setvbuf(stdout, nullptr, _IONBF, 0);
+  set_nonblocking();
+#endif
 
   // メモリの初期値を格納しているファイル名
   std::string rom_file_path = argv[1];
