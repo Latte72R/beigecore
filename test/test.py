@@ -1,6 +1,7 @@
 import argparse
 import os
 import subprocess
+
 parser = argparse.ArgumentParser()
 parser.add_argument("sim_path", help="path to simlator")
 parser.add_argument("dir", help="directory includes test")
@@ -9,11 +10,14 @@ parser.add_argument("-r", "--recursive", action='store_true', help="search file 
 parser.add_argument("-e", "--extension", default="hex", help="test file extension")
 parser.add_argument("-o", "--output_dir", default="results", help="result output directory")
 parser.add_argument("-t", "--time_limit", type=float, default=2, help="limit of execution time. set 0 to nolimit")
+parser.add_argument("--rom", default="bootrom.hex", help="hex file of rom")
+
 args = parser.parse_args()
+
 # run test
-def test(file_name):
+def test(romhex, file_name):
     result_file_path = os.path.join(args.output_dir, file_name.replace(os.sep, "_") + ".txt")
-    cmd = args.sim_path + " " + file_name + " 0"
+    cmd = f"{args.sim_path} {romhex} {file_name} 0"
     success = False
     with open(result_file_path, "w") as f:
         no = f.fileno()
@@ -27,6 +31,7 @@ def test(file_name):
             p.kill()
     print(("PASS" if success else "FAIL") + " : "+ file_name)
     return (file_name, success)
+
 # search files
 def dir_walk(dir):
     for entry in os.scandir(dir):
@@ -44,19 +49,25 @@ def dir_walk(dir):
                 if entry.name.find(f) != -1:
                     yield entry.path
                     break
+
 if __name__ == '__main__':
     os.makedirs(args.output_dir, exist_ok=True)
+
     res_strs = []
     res_statuses = []
     for hexpath in dir_walk(args.dir):
-        f, s = test(os.path.abspath(hexpath))
+        f, s = test(os.path.abspath(args.rom), os.path.abspath(hexpath))
         res_strs.append(("PASS" if s else "FAIL") + " : " + f)
         res_statuses.append(s)
+
     res_strs = sorted(res_strs)
     statusText = "Test Result : " + str(sum(res_statuses)) + " / " + str(len(res_statuses))
+
     with open(os.path.join(args.output_dir, "result.txt"), "w", encoding='utf-8') as f:
         f.write(statusText + "\n")
         f.write("\n".join(res_strs))
+
     print(statusText)
+
     if sum(res_statuses) != len(res_statuses):
         exit(1)

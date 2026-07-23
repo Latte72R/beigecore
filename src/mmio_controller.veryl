@@ -5,11 +5,13 @@ module mmio_controller (
     rst       : input   reset         ,
     req_core  : modport Membus::slave ,
     ram_membus: modport Membus::master,
+    rom_membus: modport Membus::master,
 ) {
 
     enum Device {
         UNKNOWN,
         RAM,
+        ROM,
     }
 
     // MMIO要求のうち、保存・転送が必要な部分
@@ -37,12 +39,16 @@ module mmio_controller (
     // すべてのデバイスへの要求を解除する
     function reset_all_device_masters () {
         ram_membus <> 0;
+        rom_membus <> 0;
     }
 
     // アドレスからデバイスを取得する
     function get_device (
         addr: input Addr,
     ) -> Device {
+        if MMAP_ROM_BEGIN <= addr && addr <= MMAP_ROM_END {
+            return Device::ROM;
+        }
         if addr >= MMAP_RAM_BEGIN {
             return Device::RAM;
         }
@@ -61,6 +67,13 @@ module mmio_controller (
                 ram_membus.wdata = req.wdata;
                 ram_membus.wmask = req.wmask;
             }
+            Device::ROM: {
+                rom_membus.valid = req.valid;
+                rom_membus.addr  = req.addr - MMAP_ROM_BEGIN;
+                rom_membus.wen   = req.wen;
+                rom_membus.wdata = req.wdata;
+                rom_membus.wmask = req.wmask;
+            }
             default: {}
         }
     }
@@ -78,6 +91,10 @@ module mmio_controller (
                 req_core.rvalid = ram_membus.rvalid;
                 req_core.rdata  = ram_membus.rdata;
             }
+            Device::ROM: {
+                req_core.rvalid = rom_membus.rvalid;
+                req_core.rdata  = rom_membus.rdata;
+            }
             default: {}
         }
     }
@@ -88,6 +105,7 @@ module mmio_controller (
     ) -> logic {
         case device {
             Device::RAM: return ram_membus.ready;
+            Device::ROM: return rom_membus.ready;
             default    : {}
         }
 
@@ -100,6 +118,7 @@ module mmio_controller (
     ) -> logic {
         case device {
             Device::RAM: return ram_membus.rvalid;
+            Device::ROM: return rom_membus.rvalid;
             default    : {}
         }
 
@@ -116,7 +135,7 @@ module mmio_controller (
             if is_requested {
                 // 結果を返す
                 assign_device_slave(last_device);
-                req_core.ready      = get_device_rvalid(last_device);
+                req_core.ready = get_device_rvalid(last_device);
             }
         } else {
             req_core.ready = 1;
@@ -178,6 +197,7 @@ module mmio_controller (
     function on_reset () {
         last_device  = Device::UNKNOWN;
         is_requested = 0;
+        req_saved    = 0;
     }
 
     always_ff {

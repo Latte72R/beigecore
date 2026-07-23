@@ -16,6 +16,8 @@ TIMING_PATHS ?= 10
 RV_TEST_DIR ?= test/share/riscv-tests
 RV_TEST_FILTER ?= rv64ui-p- rv64um-p-
 
+BOOTROM_HEX := bootrom.hex
+
 COREMARK_DIR ?= test/share/coremark
 COREMARK_ITERATIONS ?= 1
 COREMARK_CYCLES ?= 0
@@ -66,7 +68,7 @@ bench: $(OBJ_DIR)/$(SIM) ## Build and run CoreMark
 	}
 	$(MAKE) -C $(COREMARK_DIR) coremark COREMARK_ITERATIONS=$(COREMARK_ITERATIONS)
 	@mkdir -p $(dir $(COREMARK_RESULT))
-	@$(OBJ_DIR)/$(SIM) $(COREMARK_HEX) $(COREMARK_CYCLES) > $(COREMARK_RESULT); \
+	@$(OBJ_DIR)/$(SIM) $(BOOTROM_HEX) $(COREMARK_HEX) $(COREMARK_CYCLES) > $(COREMARK_RESULT); \
 	status=$$?; \
 	tail -n 5 $(COREMARK_RESULT); \
 	exit $$status
