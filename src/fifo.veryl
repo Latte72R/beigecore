@@ -48,6 +48,8 @@ module fifo #(
             rvalid     = head != tail;
             rdata      = mem[head];
         }
+
+        #[allow(missing_reset_statement)]
         always_ff {
             if_reset {
                 head = 0;
