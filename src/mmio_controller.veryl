@@ -3,15 +3,18 @@ import eei::*;
 module mmio_controller (
     clk       : input   clock         ,
     rst       : input   reset         ,
+    DBG_ADDR  : input   Addr          ,
     req_core  : modport Membus::slave ,
     ram_membus: modport Membus::master,
     rom_membus: modport Membus::master,
+    dbg_membus: modport Membus::master,
 ) {
 
     enum Device {
         UNKNOWN,
         RAM,
         ROM,
+        DEBUG,
     }
 
     // MMIO要求のうち、保存・転送が必要な部分
@@ -36,16 +39,20 @@ module mmio_controller (
     var last_device : Device ;
     var is_requested: logic  ;
 
-    // すべてのデバイスへの要求を解除する
+    // すべてのデバイスへの要求を解除する (reset_membus_masterの代わり)
     function reset_all_device_masters () {
         ram_membus <> 0;
         rom_membus <> 0;
+        dbg_membus <> 0;
     }
 
     // アドレスからデバイスを取得する
     function get_device (
         addr: input Addr,
     ) -> Device {
+        if DBG_ADDR <= addr && addr <= DBG_ADDR + 7 {
+            return Device::DEBUG;
+        }
         if MMAP_ROM_BEGIN <= addr && addr <= MMAP_ROM_END {
             return Device::ROM;
         }
@@ -74,6 +81,13 @@ module mmio_controller (
                 rom_membus.wdata = req.wdata;
                 rom_membus.wmask = req.wmask;
             }
+            Device::DEBUG: {
+                dbg_membus.valid = req.valid;
+                dbg_membus.addr  = req.addr - DBG_ADDR;
+                dbg_membus.wen   = req.wen;
+                dbg_membus.wdata = req.wdata;
+                dbg_membus.wmask = req.wmask;
+            }
             default: {}
         }
     }
@@ -95,6 +109,10 @@ module mmio_controller (
                 req_core.rvalid = rom_membus.rvalid;
                 req_core.rdata  = rom_membus.rdata;
             }
+            Device::DEBUG: {
+                req_core.rvalid = dbg_membus.rvalid;
+                req_core.rdata  = dbg_membus.rdata;
+            }
             default: {}
         }
     }
@@ -104,9 +122,10 @@ module mmio_controller (
         device: input Device,
     ) -> logic {
         case device {
-            Device::RAM: return ram_membus.ready;
-            Device::ROM: return rom_membus.ready;
-            default    : {}
+            Device::RAM  : return ram_membus.ready;
+            Device::ROM  : return rom_membus.ready;
+            Device::DEBUG: return dbg_membus.ready;
+            default      : {}
         }
 
         return 1;
@@ -117,9 +136,10 @@ module mmio_controller (
         device: input Device,
     ) -> logic {
         case device {
-            Device::RAM: return ram_membus.rvalid;
-            Device::ROM: return rom_membus.rvalid;
-            default    : {}
+            Device::RAM  : return ram_membus.rvalid;
+            Device::ROM  : return rom_membus.rvalid;
+            Device::DEBUG: return dbg_membus.rvalid;
+            default      : {}
         }
 
         return 1;
