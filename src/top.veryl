@@ -127,31 +127,41 @@ module top #(
 
     // デバッグ用のIO
     always_ff {
-        dbg_membus.ready  = 1;
-        dbg_membus.rvalid = dbg_membus.valid;
-        if dbg_membus.valid {
-            if dbg_membus.wen {
-                if dbg_membus.wdata[MEMBUS_DATA_WIDTH - 1-:20] == 20'h01010 {
-                    $write("%c", dbg_membus.wdata[7:0]);
-                } else if dbg_membus.wdata[MEMBUS_DATA_WIDTH - 1-:20] == 20'h10101 {
-                    $display("signature: %h", dbg_membus.wdata[31:0]);
-                } else if dbg_membus.wdata[lsb] == 1'b1 {
-                    #[ifdef(TEST_MODE)]
+        if_reset {
+            dbg_membus.ready  = 0;
+            dbg_membus.rvalid = 0;
+            dbg_membus.rdata  = 0;
+            #[ifdef(TEST_MODE)]
+            block {
+                test_success = 0;
+            }
+        } else {
+            dbg_membus.ready  = 1;
+            dbg_membus.rvalid = dbg_membus.valid;
+            if dbg_membus.valid {
+                if dbg_membus.wen {
+                    if dbg_membus.wdata[MEMBUS_DATA_WIDTH - 1-:20] == 20'h01010 {
+                        $write("%c", dbg_membus.wdata[7:0]);
+                    } else if dbg_membus.wdata[MEMBUS_DATA_WIDTH - 1-:20] == 20'h10101 {
+                        $display("signature: %h", dbg_membus.wdata[31:0]);
+                    } else if dbg_membus.wdata[lsb] == 1'b1 {
+                        #[ifdef(TEST_MODE)]
+                        block {
+                            test_success = dbg_membus.wdata == 1;
+                        }
+                        if dbg_membus.wdata == 1 {
+                            $display("test success!");
+                        } else {
+                            $display("test failed!");
+                            $error("wdata : %h", dbg_membus.wdata);
+                        }
+                        $finish();
+                    }
+                } else {
+                    #[ifdef(ENABLE_DEBUG_INPUT)]
                     block {
-                        test_success = dbg_membus.wdata == 1;
+                        dbg_membus.rdata = util::get_input();
                     }
-                    if dbg_membus.wdata == 1 {
-                        $display("test success!");
-                    } else {
-                        $display("test failed!");
-                        $error("wdata : %h", dbg_membus.wdata);
-                    }
-                    $finish();
-                }
-            } else {
-                #[ifdef(ENABLE_DEBUG_INPUT)]
-                block {
-                    dbg_membus.rdata = util::get_input();
                 }
             }
         }

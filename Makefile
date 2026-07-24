@@ -18,15 +18,25 @@ RV_TEST_FILTER ?= rv64ui-p- rv64um-p-
 
 BOOTROM_HEX := bootrom.hex
 
+RISCV_CC ?= riscv64-unknown-elf-gcc
+RISCV_OBJCOPY ?= riscv64-unknown-elf-objcopy
+DEBUG_ADDR ?= 0x40000000
+DEBUG_DIR ?= $(OBJ_DIR)/debug
+DEBUG_NAME := $(basename $(notdir $(FILE)))
+DEBUG_ELF := $(DEBUG_DIR)/$(DEBUG_NAME).elf
+DEBUG_BIN := $(DEBUG_DIR)/$(DEBUG_NAME).bin
+DEBUG_HEX := $(DEBUG_BIN).hex
+
 COREMARK_DIR ?= test/share/coremark
 COREMARK_ITERATIONS ?= 1
 COREMARK_CYCLES ?= 0
+COREMARK_DBG_ADDR ?= 0x80001000
 COREMARK_RESULT ?= results/coremark.txt
 COREMARK_HEX ?= $(COREMARK_DIR)/build/coremark.riscv.bin.hex
 
 .DEFAULT_GOAL := help
 
-.PHONY: help build clean sim test bench synth fmax
+.PHONY: help build clean sim test debug bench synth fmax
 
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*?## "}; /^[a-zA-Z_-]+:.*?## / {printf "\033[36m%-12s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -61,6 +71,21 @@ test: $(OBJ_DIR)/$(SIM) ## Run tests with the built simulator
 	done; \
 	exit $$status
 
+debug: $(OBJ_DIR)/$(SIM) ## Build and run FILE (for example: make debug FILE=debug_output.c)
+	@test -n "$(FILE)" || { \
+		echo "Usage: make debug FILE=<source file>"; \
+		exit 2; \
+	}
+	@src="$(FILE)"; \
+	if [ ! -f "$$src" ]; then src="test/$(FILE)"; fi; \
+	test -f "$$src" || { echo "Source file not found: $(FILE)"; exit 2; }; \
+	mkdir -p $(DEBUG_DIR); \
+	$(RISCV_CC) -nostartfiles -nostdlib -mcmodel=medany \
+		-T test/link.ld -march=rv64imad "$$src" test/entry.S -o $(DEBUG_ELF)
+	$(RISCV_OBJCOPY) $(DEBUG_ELF) -O binary $(DEBUG_BIN)
+	python3 test/bin2hex.py 8 $(DEBUG_BIN) > $(DEBUG_HEX)
+	DBG_ADDR=$(DEBUG_ADDR) $(OBJ_DIR)/$(SIM) $(BOOTROM_HEX) $(DEBUG_HEX)
+
 bench: $(OBJ_DIR)/$(SIM) ## Build and run CoreMark
 	@test -f "$(COREMARK_DIR)/core_main.c" || { \
 		echo "CoreMark submodule is missing. Run: git submodule update --init --recursive"; \
@@ -68,7 +93,7 @@ bench: $(OBJ_DIR)/$(SIM) ## Build and run CoreMark
 	}
 	$(MAKE) -C $(COREMARK_DIR) coremark COREMARK_ITERATIONS=$(COREMARK_ITERATIONS)
 	@mkdir -p $(dir $(COREMARK_RESULT))
-	@$(OBJ_DIR)/$(SIM) $(BOOTROM_HEX) $(COREMARK_HEX) $(COREMARK_CYCLES) > $(COREMARK_RESULT); \
+	@DBG_ADDR=$(COREMARK_DBG_ADDR) $(OBJ_DIR)/$(SIM) $(BOOTROM_HEX) $(COREMARK_HEX) $(COREMARK_CYCLES) > $(COREMARK_RESULT); \
 	status=$$?; \
 	tail -n 5 $(COREMARK_RESULT); \
 	exit $$status
