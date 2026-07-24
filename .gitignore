@@ -6,6 +6,7 @@
 
 # Verilator
 obj_dir/
+obj_dir_debug/
 
 # Test
 results/

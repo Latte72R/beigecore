@@ -10,6 +10,11 @@ VERILATOR_FLAGS ?= -DTEST_MODE
 VERILATOR_CPPFLAGS := $(filter -D%,$(VERILATOR_FLAGS))
 VERYL_SRCS := $(wildcard src/*.veryl)
 
+DEBUG_SIM_DIR := $(OBJ_DIR)_debug
+DEBUG_SIM := $(DEBUG_SIM_DIR)/V$(PROJECT)_$(SIM_TOP)
+DEBUG_VERILATOR_FLAGS ?= $(VERILATOR_FLAGS) -DENABLE_DEBUG_INPUT
+DEBUG_VERILATOR_CPPFLAGS := $(filter -D%,$(DEBUG_VERILATOR_FLAGS))
+
 SYNTH_TOP ?= core
 TIMING_PATHS ?= 10
 
@@ -23,6 +28,7 @@ RISCV_OBJCOPY ?= riscv64-unknown-elf-objcopy
 DEBUG_ADDR ?= 0x40000000
 DEBUG_DIR ?= $(OBJ_DIR)/debug
 DEBUG_NAME := $(basename $(notdir $(FILE)))
+DEBUG_SOURCE = $(if $(wildcard $(FILE)),$(FILE),test/$(FILE))
 DEBUG_ELF := $(DEBUG_DIR)/$(DEBUG_NAME).elf
 DEBUG_BIN := $(DEBUG_DIR)/$(DEBUG_NAME).bin
 DEBUG_HEX := $(DEBUG_BIN).hex
@@ -49,7 +55,7 @@ $(FILELIST): $(VERYL_SRCS) Veryl.toml Veryl.lock
 
 clean: ## Clean generated files
 	veryl clean
-	rm -rf $(OBJ_DIR)
+	rm -rf $(OBJ_DIR) $(DEBUG_SIM_DIR)
 
 $(OBJ_DIR)/$(SIM): $(FILELIST) $(VERYL_SRCS) $(TB) Makefile
 	verilator --cc $(VERILATOR_FLAGS) \
@@ -61,6 +67,15 @@ $(OBJ_DIR)/$(SIM): $(FILELIST) $(VERYL_SRCS) $(TB) Makefile
 	$(MAKE) -C $(OBJ_DIR) -f V$(PROJECT)_$(SIM_TOP).mk
 	mv $(OBJ_DIR)/V$(PROJECT)_$(SIM_TOP) $(OBJ_DIR)/$(SIM)
 
+$(DEBUG_SIM): $(FILELIST) $(VERYL_SRCS) $(TB) Makefile
+	verilator --cc $(DEBUG_VERILATOR_FLAGS) \
+		$(if $(DEBUG_VERILATOR_CPPFLAGS),-CFLAGS "$(DEBUG_VERILATOR_CPPFLAGS)") \
+		-f $(FILELIST) \
+		--exe $(TB) \
+		--top-module $(PROJECT)_$(SIM_TOP) \
+		--Mdir $(DEBUG_SIM_DIR)
+	$(MAKE) -C $(DEBUG_SIM_DIR) -f V$(PROJECT)_$(SIM_TOP).mk
+
 sim: $(OBJ_DIR)/$(SIM) ## Build the Verilator simulator
 
 test: $(OBJ_DIR)/$(SIM) ## Run tests with the built simulator
@@ -71,20 +86,21 @@ test: $(OBJ_DIR)/$(SIM) ## Run tests with the built simulator
 	done; \
 	exit $$status
 
-debug: $(OBJ_DIR)/$(SIM) ## Build and run FILE (for example: make debug FILE=debug_output.c)
+debug: $(DEBUG_SIM) ## Build and run FILE (for example: make debug FILE=debug_output.c)
 	@test -n "$(FILE)" || { \
 		echo "Usage: make debug FILE=<source file>"; \
 		exit 2; \
 	}
-	@src="$(FILE)"; \
-	if [ ! -f "$$src" ]; then src="test/$(FILE)"; fi; \
-	test -f "$$src" || { echo "Source file not found: $(FILE)"; exit 2; }; \
-	mkdir -p $(DEBUG_DIR); \
-	$(RISCV_CC) -nostartfiles -nostdlib -mcmodel=medany \
-		-T test/link.ld -march=rv64imad "$$src" test/entry.S -o $(DEBUG_ELF)
+	@test -f "$(DEBUG_SOURCE)" || { \
+		echo "Source file not found: $(FILE)"; \
+		exit 2; \
+	}
+	@mkdir -p $(DEBUG_DIR)
+	$(RISCV_CC) -nostartfiles -nostdlib -fno-builtin -mcmodel=medany \
+		-T test/link.ld -march=rv64imad "$(DEBUG_SOURCE)" test/entry.S -o $(DEBUG_ELF)
 	$(RISCV_OBJCOPY) $(DEBUG_ELF) -O binary $(DEBUG_BIN)
 	python3 test/bin2hex.py 8 $(DEBUG_BIN) > $(DEBUG_HEX)
-	DBG_ADDR=$(DEBUG_ADDR) $(OBJ_DIR)/$(SIM) $(BOOTROM_HEX) $(DEBUG_HEX)
+	DBG_ADDR=$(DEBUG_ADDR) $(DEBUG_SIM) $(BOOTROM_HEX) $(DEBUG_HEX)
 
 bench: $(OBJ_DIR)/$(SIM) ## Build and run CoreMark
 	@test -f "$(COREMARK_DIR)/core_main.c" || { \
