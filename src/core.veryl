@@ -593,11 +593,73 @@ module core (
     {
         var clock_count: u64;
 
+        var perf_cycles         : u64;
+        var perf_issued         : u64;
+        var perf_committed      : u64;
+        var perf_ex_empty       : u64;
+        var perf_serial_stall   : u64;
+        var perf_raw_stall      : u64;
+        var perf_muldiv_stall   : u64;
+        var perf_rob_full_stall : u64;
+        var perf_memq_full_stall: u64;
+        var perf_mem_wait       : u64;
+        var perf_head_wait      : u64;
+        var perf_control_hazard : u64;
+
         always_ff {
             if_reset {
                 clock_count = 1;
+
+                perf_cycles          = 0;
+                perf_issued          = 0;
+                perf_committed       = 0;
+                perf_ex_empty        = 0;
+                perf_serial_stall    = 0;
+                perf_raw_stall       = 0;
+                perf_muldiv_stall    = 0;
+                perf_rob_full_stall  = 0;
+                perf_memq_full_stall = 0;
+                perf_mem_wait        = 0;
+                perf_head_wait       = 0;
+                perf_control_hazard  = 0;
             } else {
-                clock_count = clock_count + 1;
+                clock_count += 1;
+
+                perf_cycles += 1;
+
+                if rob_alloc_fire {
+                    perf_issued += 1;
+                }
+
+                if rob_commit_fire {
+                    perf_committed += 1;
+                }
+
+                // EX段の停止理由を排他的に数える
+                if !exq_rvalid {
+                    perf_ex_empty += 1;
+                } else if control_hazard {
+                    perf_control_hazard += 1;
+                } else if serial_pending {
+                    perf_serial_stall += 1;
+                } else if exs_data_hazard {
+                    perf_raw_stall += 1;
+                } else if exs_muldiv_stall {
+                    perf_muldiv_stall += 1;
+                } else if !rob_aready {
+                    perf_rob_full_stall += 1;
+                } else if !exs_route_ready {
+                    perf_memq_full_stall += 1;
+                }
+
+                // MEM側はEX停止理由と重複してもよい独立カウンタ
+                if memq_rvalid && memu_stall {
+                    perf_mem_wait += 1;
+                }
+
+                if memq_rvalid && !mems_can_execute {
+                    perf_head_wait += 1;
+                }
 
                 $display("");
                 $display("# %d", clock_count);
@@ -644,6 +706,20 @@ module core (
                         $display("  reg[%d] <= %h", wbs_rd_addr, wbs_wb_data);
                     }
                 }
+
+                $display("PERFORMANCE COUNTERS");
+                $display("  total cycles             : %0d", perf_cycles);
+                $display("  instructions issued      : %0d", perf_issued);
+                $display("  instructions committed   : %0d", perf_committed);
+                $display("  EX has no instruction    : %0d", perf_ex_empty);
+                $display("  control hazard / flush   : %0d", perf_control_hazard);
+                $display("  serializing instruction  : %0d", perf_serial_stall);
+                $display("  RAW dependency           : %0d", perf_raw_stall);
+                $display("  multiply/divide wait     : %0d", perf_muldiv_stall);
+                $display("  ROB full                 : %0d", perf_rob_full_stall);
+                $display("  EX/MEM queue full        : %0d", perf_memq_full_stall);
+                $display("  memory response wait     : %0d", perf_mem_wait);
+                $display("  waiting for ROB head     : %0d", perf_head_wait);
             }
         }
     }
