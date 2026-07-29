@@ -360,25 +360,36 @@ module core (
         take  : exs_brunit_take,
     );
 
-    let exs_stall: logic = exs_data_hazard || exs_muldiv_stall;
+    let exs_stall    : logic = exs_data_hazard || exs_muldiv_stall;
+    let exs_needs_mem: logic = inst_is_memop(exs_ctrl) || exs_ctrl.is_csr || exs_ctrl.is_jump || inst_is_br(exs_ctrl)
+        || exq_rdata.expt.valid;
 
     always_comb {
-        rob_adone            = 0;
-        rob_adata.addr       = exq_rdata.addr;
-        rob_adata.bits       = exq_rdata.bits;
-        rob_adata.ctrl       = exq_rdata.ctrl;
-        rob_adata.rd_addr    = exq_rdata.bits[11:7];
-        rob_adata.result     = 0;
+        rob_adone         = !exs_needs_mem;
+        rob_adata.addr    = exq_rdata.addr;
+        rob_adata.bits    = exq_rdata.bits;
+        rob_adata.ctrl    = exq_rdata.ctrl;
+        rob_adata.rd_addr = exq_rdata.bits[11:7];
+        rob_adata.result  = switch {
+            exs_ctrl.is_lui   : exq_rdata.imm,
+            exs_ctrl.is_muldiv: exs_muldiv_result,
+            default           : exs_alu_result,
+        };
         rob_adata.expt       = memq_wdata.expt;
         rob_adata.raise_trap = 0;
     }
 
+    // 命令が進む経路に空きがあるか
+    let exs_route_ready: logic = !exs_needs_mem || memq_wready;
+    // EX段の命令がROBへ実際に登録された
+    let exs_issue: logic = rob_avalid && rob_aready;
+
     always_comb {
         // EX -> MEM
         // ROBだけallocationされたり MEM FIFOだけ書き込まれたりするのを防ぐ
-        rob_avalid  = exq_rvalid && memq_wready && !exs_stall && !control_hazard;
-        exq_rready  = rob_aready && memq_wready && !exs_stall && !control_hazard;
-        memq_wvalid = exq_rvalid && rob_aready && !exs_stall && !control_hazard;
+        rob_avalid  = exq_rvalid && exs_route_ready && !exs_stall && !control_hazard;
+        exq_rready  = rob_aready && exs_route_ready && !exs_stall && !control_hazard;
+        memq_wvalid = exs_issue && exs_needs_mem;
 
         memq_wdata.addr       = exq_rdata.addr;
         memq_wdata.bits       = exq_rdata.bits;
@@ -624,7 +635,7 @@ module core (
 
     inst id_ex_fifo: fifo #(
         DATA_TYPE: exq_type,
-        WIDTH    : 1       ,
+        WIDTH    : 2       ,
     ) (
         clk                   ,
         rst                   ,
