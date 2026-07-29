@@ -382,14 +382,14 @@ module core (
     // 命令が進む経路に空きがあるか
     let exs_route_ready: logic = !exs_needs_mem || memq_wready;
     // EX段の命令がROBへ実際に登録された
-    let exs_issue: logic = rob_avalid && rob_aready;
+    let rob_alloc_fire: logic = rob_avalid && rob_aready;
 
     always_comb {
         // EX -> MEM
         // ROBだけallocationされたり MEM FIFOだけ書き込まれたりするのを防ぐ
         rob_avalid  = exq_rvalid && exs_route_ready && !exs_stall && !control_hazard;
         exq_rready  = rob_aready && exs_route_ready && !exs_stall && !control_hazard;
-        memq_wvalid = exs_issue && exs_needs_mem;
+        memq_wvalid = rob_alloc_fire && exs_needs_mem;
 
         memq_wdata.addr       = exq_rdata.addr;
         memq_wdata.bits       = exq_rdata.bits;
@@ -433,7 +433,6 @@ module core (
 
     ///////////////////////////////// MEM Stage /////////////////////////////////
 
-    var mems_is_new   : logic           ;
     let mems_valid    : logic            = memq_rvalid;
     let mems_pc       : Addr             = memq_rdata.addr;
     let mems_inst_bits: Inst             = memq_rdata.bits;
@@ -441,32 +440,25 @@ module core (
     let mems_expt     : ExceptionInfo    = memq_rdata.expt;
     let mems_rd_addr  : logic        <5> = mems_inst_bits[11:7];
 
-    always_ff {
-        if_reset {
-            mems_is_new = 0;
-        } else {
-            if if_fifo_rvalid {
-                mems_is_new = if_fifo_rready;
-            } else {
-                mems_is_new = 1;
-            }
-        }
-    }
+    let mems_is_store   : logic = inst_is_store(mems_ctrl);
+    let mems_at_rob_head: logic = rob_hvalid && rob_htag == memq_rdata.rob_tag;
+
+    // Storeでなければ実行してよい，StoreならROB先頭の場合だけ実行してよい
+    let mems_can_execute: logic = !mems_is_store || mems_at_rob_head;
 
     var memu_rdata: UIntX;
     var memu_stall: logic;
 
     inst memu: memunit (
-        clk                                   ,
-        rst                                   ,
-        valid : mems_valid && !mems_expt.valid,
-        is_new: mems_is_new                   ,
-        ctrl  : mems_ctrl                     ,
-        addr  : memq_rdata.alu_result         ,
-        rs2   : memq_rdata.rs2_data           ,
-        rdata : memu_rdata                    ,
-        stall : memu_stall                    ,
-        membus: d_membus                      ,
+        clk                                                       ,
+        rst                                                       ,
+        valid : mems_valid && mems_can_execute && !mems_expt.valid,
+        ctrl  : mems_ctrl                                         ,
+        addr  : memq_rdata.alu_result                             ,
+        rs2   : memq_rdata.rs2_data                               ,
+        rdata : memu_rdata                                        ,
+        stall : memu_stall                                        ,
+        membus: d_membus                                          ,
     );
 
     var csru_rdata      : UIntX;
@@ -474,27 +466,27 @@ module core (
     var csru_trap_vector: Addr ;
 
     inst csru: csrunit (
-        clk                               ,
-        rst                               ,
-        valid      : mems_valid           ,
-        pc         : mems_pc              ,
-        inst_bits  : mems_inst_bits       ,
-        ctrl       : mems_ctrl            ,
-        expt_info  : mems_expt            ,
-        rd_addr    : mems_rd_addr         ,
-        csr_addr   : mems_inst_bits[31:20],
-        rs1_addr   : memq_rdata.rs1_addr  ,
-        rs1_data   : memq_rdata.rs1_data  ,
-        rdata      : csru_rdata           ,
-        raise_trap : csru_raise_trap      ,
-        trap_vector: csru_trap_vector     ,
-        led                               ,
+        clk                                        ,
+        rst                                        ,
+        valid      : mems_valid && mems_can_execute,
+        pc         : mems_pc                       ,
+        inst_bits  : mems_inst_bits                ,
+        ctrl       : mems_ctrl                     ,
+        expt_info  : mems_expt                     ,
+        rd_addr    : mems_rd_addr                  ,
+        csr_addr   : mems_inst_bits[31:20]         ,
+        rs1_addr   : memq_rdata.rs1_addr           ,
+        rs1_data   : memq_rdata.rs1_data           ,
+        rdata      : csru_rdata                    ,
+        raise_trap : csru_raise_trap               ,
+        trap_vector: csru_trap_vector              ,
+        led                                        ,
     );
 
     always_comb {
         // MEM -> WB
-        memq_rready = !memu_stall;
-        rob_cvalid  = memq_rvalid && !memu_stall;
+        memq_rready = mems_can_execute && !memu_stall;
+        rob_cvalid  = memq_rvalid && mems_can_execute && !memu_stall;
         rob_ctag    = memq_rdata.rob_tag;
 
         rob_cdata.addr    = memq_rdata.addr;
@@ -515,7 +507,8 @@ module core (
     }
 
     always_comb {
-        control_hazard         = mems_valid && (csru_raise_trap || mems_ctrl.is_jump || memq_rdata.br_taken);
+        control_hazard         = mems_valid && mems_can_execute
+            && (csru_raise_trap || mems_ctrl.is_jump || memq_rdata.br_taken);
         control_hazard_pc_next = if csru_raise_trap ? csru_trap_vector : memq_rdata.jump_addr;
     }
 
@@ -540,8 +533,6 @@ module core (
 
     ///////////////////////////////// Pending Writes /////////////////////////////////
 
-    // EX命令が実際にROBへ登録された
-    let rob_alloc_fire: logic = rob_avalid && rob_aready;
     // ROB先頭命令が実際にコミットされた
     let rob_commit_fire: logic = rob_rvalid && rob_rready;
 

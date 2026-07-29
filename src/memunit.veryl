@@ -4,7 +4,6 @@ module memunit (
     clk   : input   clock         ,
     rst   : input   reset         ,
     valid : input   logic         ,
-    is_new: input   logic         , // 命令が新しく供給されたかどうか
     ctrl  : input   InstCtrl      , // 命令のInstCtrl
     addr  : input   Addr          , // アクセスするアドレス
     rs2   : input   UIntX         , // ストア命令で書き込むデータ
@@ -73,7 +72,7 @@ module memunit (
         // stall判定
         stall = valid
             & case state {
-                State::Init     : is_new && inst_is_memop(ctrl),
+                State::Init     : inst_is_memop(ctrl),
                 State::WaitReady: 1,
                 State::WaitValid: !membus.rvalid,
                 default         : 0,
@@ -91,7 +90,7 @@ module memunit (
                 state = State::Init;
             } else {
                 case state {
-                    State::Init: if is_new & inst_is_memop(ctrl) {
+                    State::Init: if inst_is_memop(ctrl) {
                         state     = State::WaitReady;
                         req_wen   = inst_is_store(ctrl);
                         req_addr  = addr;
