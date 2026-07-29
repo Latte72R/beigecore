@@ -242,9 +242,6 @@ module core (
     // レジスタ
     var regfile: UIntX<32>;
 
-    // ROB内に存在する未コミットの書込み命令数
-    var pending_writes: logic<ROB_WIDTH> [32];
-
     // 各レジスタを最後に書く予定のROBエントリ
     var producer_valid: logic  [32];
     var producer_tag  : RobTag [32];
@@ -586,31 +583,6 @@ module core (
 
     // ROB先頭命令が実際にコミットされた
     let rob_commit_fire: logic = rob_rvalid && rob_rready;
-
-    // allocationされた命令がレジスタへ書く場合pendingを増やす
-    let pending_alloc: logic = rob_alloc_fire && rob_adata.ctrl.rwb_en && rob_adata.rd_addr != 0;
-    // コミットされた命令が書込み予約を持っている場合pendingを減らす
-    let pending_commit: logic = rob_commit_fire && rob_rdata.ctrl.rwb_en && rob_rdata.rd_addr != 0;
-
-    always_ff {
-        if_reset {
-            for i in 0..32 {
-                pending_writes[i] = 0;
-            }
-        } else {
-            if pending_alloc && pending_commit && rob_adata.rd_addr == rob_rdata.rd_addr {
-                // 同じレジスタへの +1 と -1 が同時に発生するので変更なし
-            } else {
-                if pending_alloc {
-                    pending_writes[rob_adata.rd_addr] += 1;
-                }
-
-                if pending_commit {
-                    pending_writes[rob_rdata.rd_addr] -= 1;
-                }
-            }
-        }
-    }
 
     let producer_commit: logic = rob_commit_fire && rob_rdata.ctrl.rwb_en && rob_rdata.rd_addr != 0;
 

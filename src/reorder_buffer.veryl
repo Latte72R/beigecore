@@ -53,6 +53,9 @@ module reorder_buffer #(
         var mem      : DATA_TYPE [2 ** WIDTH];
         var completed: logic     [2 ** WIDTH];
 
+        let q1completing: logic = cvalid && ctag == q1tag;
+        let q2completing: logic = cvalid && ctag == q2tag;
+
         always_comb {
             // ROB head
             hvalid = head != tail;
@@ -67,10 +70,10 @@ module reorder_buffer #(
             atag   = tail;
 
             // query
-            q1done = completed[q1tag];
-            q1data = mem[q1tag];
-            q2done = completed[q2tag];
-            q2data = mem[q2tag];
+            q1done = completed[q1tag] || q1completing;
+            q1data = if q1completing ? cdata : mem[q1tag];
+            q2done = completed[q2tag] || q2completing;
+            q2data = if q2completing ? cdata : mem[q2tag];
         }
 
         #[allow(missing_reset_statement)]
