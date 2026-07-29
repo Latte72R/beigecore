@@ -41,12 +41,14 @@ module fifo #(
         var tail      : Ptr                          ;
         let tail_plus1: Ptr                           = tail + 1 as Ptr;
         let tail_plus2: Ptr                           = tail + 2 as Ptr;
+        let full      : logic                         = tail_plus1 == head;
+        let pop       : logic                         = rready && rvalid;
         var mem       : DATA_TYPE        [2 ** WIDTH];
         always_comb {
-            wready     = tail_plus1 != head;
-            wready_two = wready && tail_plus2 != head;
             rvalid     = head != tail;
             rdata      = mem[head];
+            wready     = !full || pop; // 1要素を書き込める
+            wready_two = !full && (tail_plus2 != head || pop); // 2要素を書き込める
         }
 
         #[allow(missing_reset_statement)]

@@ -23,6 +23,7 @@ module core (
     }
 
     struct memq_type {
+        rob_tag   : RobTag          ,
         addr      : Addr            ,
         bits      : Inst            ,
         ctrl      : InstCtrl        ,
@@ -45,6 +46,16 @@ module core (
         mem_rdata : UIntX   ,
         csr_rdata : UIntX   ,
         raise_trap: logic   ,
+    }
+
+    struct rob_entry_type {
+        addr      : Addr            ,
+        bits      : Inst            ,
+        ctrl      : InstCtrl        ,
+        rd_addr   : logic        <5>,
+        result    : UIntX           ,
+        expt      : ExceptionInfo   ,
+        raise_trap: logic           ,
     }
 
     // FIFOの制御用レジスタ
@@ -72,13 +83,23 @@ module core (
     var memq_rvalid: logic    ;
     var memq_rdata : memq_type;
 
-    // MEM -> WBのFIFO
-    var wbq_wready: logic   ;
-    var wbq_wvalid: logic   ;
-    var wbq_wdata : wbq_type;
-    var wbq_rready: logic   ;
-    var wbq_rvalid: logic   ;
-    var wbq_rdata : wbq_type;
+    // (EX, MEM) -> WB の Reorder Buffer
+    var rob_avalid: logic         ;
+    var rob_aready: logic         ;
+    var rob_adone : logic         ;
+    var rob_adata : rob_entry_type;
+    var rob_atag  : RobTag        ;
+
+    var rob_cvalid: logic         ;
+    var rob_ctag  : RobTag        ;
+    var rob_cdata : rob_entry_type;
+
+    var rob_rvalid: logic         ;
+    var rob_rready: logic         ;
+    var rob_rdata : rob_entry_type;
+
+    var rob_hvalid: logic ;
+    var rob_htag  : RobTag;
 
     ///////////////////////////////// IF Stage /////////////////////////////////
 
@@ -324,9 +345,23 @@ module core (
     let exs_stall: logic = exs_data_hazard || exs_muldiv_stall;
 
     always_comb {
+        rob_adone            = 0;
+        rob_adata.addr       = exq_rdata.addr;
+        rob_adata.bits       = exq_rdata.bits;
+        rob_adata.ctrl       = exq_rdata.ctrl;
+        rob_adata.rd_addr    = exq_rdata.bits[11:7];
+        rob_adata.result     = 0;
+        rob_adata.expt       = memq_wdata.expt;
+        rob_adata.raise_trap = 0;
+    }
+
+    always_comb {
         // EX -> MEM
-        exq_rready            = memq_wready && !exs_stall;
-        memq_wvalid           = exq_rvalid && !exs_stall;
+        // ROBだけallocationされたり MEM FIFOだけ書き込まれたりするのを防ぐ
+        rob_avalid  = exq_rvalid && memq_wready && !exs_stall && !control_hazard;
+        exq_rready  = rob_aready && memq_wready && !exs_stall && !control_hazard;
+        memq_wvalid = exq_rvalid && rob_aready && !exs_stall && !control_hazard;
+
         memq_wdata.addr       = exq_rdata.addr;
         memq_wdata.bits       = exq_rdata.bits;
         memq_wdata.ctrl       = exq_rdata.ctrl;
@@ -337,6 +372,7 @@ module core (
         memq_wdata.alu_result = if exs_ctrl.is_muldiv ? exs_muldiv_result : exs_alu_result;
         memq_wdata.br_taken   = exs_ctrl.is_jump || inst_is_br(exs_ctrl) && exs_brunit_take;
         memq_wdata.jump_addr  = if inst_is_br(exs_ctrl) ? exs_pc + exs_imm : exs_alu_result & ~1;
+        memq_wdata.rob_tag    = rob_atag;
 
         // exception
         let instruction_address_misaligned: logic = memq_wdata.br_taken && memq_wdata.jump_addr[1:0] != 2'b00;
@@ -349,7 +385,7 @@ module core (
                 default: 1'b0,
             };
         memq_wdata.expt = exq_rdata.expt;
-        if !memq_rdata.expt.valid {
+        if !memq_wdata.expt.valid {
             if instruction_address_misaligned {
                 memq_wdata.expt.valid = 1;
                 memq_wdata.expt.cause = CsrCause::INSTRUCTION_ADDRESS_MISALIGNED;
@@ -428,16 +464,25 @@ module core (
 
     always_comb {
         // MEM -> WB
-        memq_rready          = wbq_wready && !memu_stall;
-        wbq_wvalid           = memq_rvalid && !memu_stall;
-        wbq_wdata.addr       = memq_rdata.addr;
-        wbq_wdata.bits       = memq_rdata.bits;
-        wbq_wdata.ctrl       = memq_rdata.ctrl;
-        wbq_wdata.imm        = memq_rdata.imm;
-        wbq_wdata.alu_result = memq_rdata.alu_result;
-        wbq_wdata.mem_rdata  = memu_rdata;
-        wbq_wdata.csr_rdata  = csru_rdata;
-        wbq_wdata.raise_trap = csru_raise_trap;
+        memq_rready = !memu_stall;
+        rob_cvalid  = memq_rvalid && !memu_stall;
+        rob_ctag    = memq_rdata.rob_tag;
+
+        rob_cdata.addr    = memq_rdata.addr;
+        rob_cdata.bits    = memq_rdata.bits;
+        rob_cdata.ctrl    = memq_rdata.ctrl;
+        rob_cdata.rd_addr = memq_rdata.bits[11:7];
+
+        rob_cdata.result = switch {
+            mems_ctrl.is_lui : memq_rdata.imm,
+            mems_ctrl.is_jump: memq_rdata.addr + 4,
+            mems_ctrl.is_load: memu_rdata,
+            mems_ctrl.is_csr : csru_rdata,
+            default          : memq_rdata.alu_result
+        };
+
+        rob_cdata.expt       = memq_rdata.expt;
+        rob_cdata.raise_trap = csru_raise_trap;
     }
 
     always_comb {
@@ -449,30 +494,21 @@ module core (
 
     ///////////////////////////////// WB Stage /////////////////////////////////
 
-    let wbs_valid    : logic    = wbq_rvalid;
-    let wbs_pc       : Addr     = wbq_rdata.addr;
-    let wbs_inst_bits: Inst     = wbq_rdata.bits;
-    let wbs_ctrl     : InstCtrl = wbq_rdata.ctrl;
-    let wbs_imm      : UIntX    = wbq_rdata.imm;
-
-    let wbs_rd_addr: logic<5> = wbs_inst_bits[11:7];
-    let wbs_wb_data: UIntX    = switch {
-        wbs_ctrl.is_lui : wbs_imm,
-        wbs_ctrl.is_jump: wbs_pc + 4,
-        wbs_ctrl.is_load: wbq_rdata.mem_rdata,
-        wbs_ctrl.is_csr : wbq_rdata.csr_rdata,
-        default         : wbq_rdata.alu_result
-    };
+    let wbs_valid  : logic       = rob_rvalid;
+    let wbs_ctrl   : InstCtrl    = rob_rdata.ctrl;
+    let wbs_rd_addr: logic   <5> = rob_rdata.rd_addr;
+    let wbs_wb_data: UIntX       = rob_rdata.result;
 
     always_ff {
-        if wbs_valid && wbs_ctrl.rwb_en && !wbq_rdata.raise_trap {
-            regfile[wbs_rd_addr] = wbs_wb_data;
+        // ROB先頭が完成済み & コミットが成立 & レジスタ書込み命令 & x0ではない & trapではない
+        if rob_rvalid && rob_rready && rob_rdata.ctrl.rwb_en && rob_rdata.rd_addr != 0 && !rob_rdata.raise_trap {
+            regfile[rob_rdata.rd_addr] = rob_rdata.result;
         }
     }
 
     always_comb {
         // WB -> END
-        wbq_rready = 1;
+        rob_rready = 1;
     }
 
     always_comb {
@@ -532,7 +568,7 @@ module core (
                 }
                 $display("WB ----");
                 if wbs_valid {
-                    $display("  %h : %h", wbq_rdata.addr, wbq_rdata.bits);
+                    $display("  %h : %h", rob_rdata.addr, rob_rdata.bits);
                     if wbs_ctrl.rwb_en {
                         $display("  reg[%d] <= %h", wbs_rd_addr, wbs_wb_data);
                     }
@@ -557,6 +593,7 @@ module core (
         rvalid: exq_rvalid    ,
         rdata : exq_rdata     ,
     );
+
     inst ex_mem_fifo: fifo #(
         DATA_TYPE: memq_type,
         WIDTH    : 1        ,
@@ -571,18 +608,30 @@ module core (
         rvalid: memq_rvalid   ,
         rdata : memq_rdata    ,
     );
-    inst mem_wb_fifo: fifo #(
-        DATA_TYPE: wbq_type,
-        WIDTH    : 1       ,
+
+    inst rob: reorder_buffer #(
+        DATA_TYPE: rob_entry_type,
+        WIDTH    : ROB_WIDTH     ,
     ) (
-        clk               ,
-        rst               ,
-        flush : 0         ,
-        wready: wbq_wready,
-        wvalid: wbq_wvalid,
-        wdata : wbq_wdata ,
-        rready: wbq_rready,
-        rvalid: wbq_rvalid,
-        rdata : wbq_rdata ,
+        clk     ,
+        rst     ,
+        flush: 0,
+
+        avalid: rob_avalid,
+        aready: rob_aready,
+        adone : rob_adone ,
+        adata : rob_adata ,
+        atag  : rob_atag  ,
+
+        cvalid: rob_cvalid,
+        ctag  : rob_ctag  ,
+        cdata : rob_cdata ,
+
+        rvalid: rob_rvalid,
+        rready: rob_rready,
+        rdata : rob_rdata ,
+
+        hvalid: rob_hvalid,
+        htag  : rob_htag  ,
     );
 }

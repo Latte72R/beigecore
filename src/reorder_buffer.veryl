@@ -1,0 +1,89 @@
+module reorder_buffer #(
+    param DATA_TYPE: type = logic,
+    param WIDTH    : u32  = 2    ,
+) (
+    clk  : input clock,
+    rst  : input reset,
+    flush: input logic,
+
+    // EXから新しい命令を登録する (allocate)
+    avalid: input  logic           ,
+    aready: output logic           ,
+    adone : input  logic           ,
+    adata : input  DATA_TYPE       ,
+    atag  : output logic    <WIDTH>,
+
+    // MEMなどから実行結果を埋める (complete)
+    cvalid: input logic           ,
+    ctag  : input logic    <WIDTH>,
+    cdata : input DATA_TYPE       ,
+
+    // 先頭の完成済み命令を読みだす (commit)
+    rvalid: output logic    ,
+    rready: input  logic    ,
+    rdata : output DATA_TYPE,
+
+    // head の情報（Storeの先頭判定につかう）
+    hvalid: output logic       ,
+    htag  : output logic<WIDTH>,
+) {
+    if WIDTH <= 1 :invalid_width {
+        initial {
+            $fatal(1, "reorder_buffer requires WIDTH > 1");
+        }
+    } else {
+        type Ptr        = logic<WIDTH>;
+        var head      : Ptr         ;
+        var tail      : Ptr         ;
+        let tail_plus1: Ptr          = tail + 1 as Ptr;
+        let full      : logic        = tail_plus1 == head;
+
+        // 実際に成立（発火）したか
+        let rfire: logic = rvalid && rready;
+        let afire: logic = avalid && aready;
+
+        var mem      : DATA_TYPE [2 ** WIDTH];
+        var completed: logic     [2 ** WIDTH];
+
+        always_comb {
+            // ROB head
+            hvalid = head != tail;
+            htag   = head;
+
+            // commit
+            rvalid = hvalid && completed[head];
+            rdata  = mem[head];
+
+            // allocate
+            aready = !full || rfire;
+            atag   = tail;
+        }
+
+        #[allow(missing_reset_statement)]
+        always_ff {
+            if_reset {
+                head = 0;
+                tail = 0;
+            } else {
+                if flush {
+                    head = 0;
+                    tail = 0;
+                } else {
+                    if afire {
+                        mem[tail]       = adata;
+                        completed[tail] = adone;
+                        tail            = tail + 1;
+                    }
+                    if cvalid {
+                        mem[ctag]       = cdata;
+                        completed[ctag] = 1;
+                    }
+                    if rfire {
+                        completed[head] = 0;
+                        head            = head + 1;
+                    }
+                }
+            }
+        }
+    }
+}
