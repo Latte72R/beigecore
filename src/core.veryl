@@ -379,16 +379,24 @@ module core (
         rob_adata.raise_trap = 0;
     }
 
+    // 未解決の直列化命令がROB/MEM内にある
+    var serial_pending: logic;
+
     // 命令が進む経路に空きがあるか
     let exs_route_ready: logic = !exs_needs_mem || memq_wready;
     // EX段の命令がROBへ実際に登録された
     let rob_alloc_fire: logic = rob_avalid && rob_aready;
+    // ROBに登録された命令が直列化命令（後続命令を確定できない命令）かどうか
+    let exs_redirect      : logic = exs_ctrl.is_jump || (inst_is_br(exs_ctrl) && exs_brunit_take);
+    let exs_is_serializing: logic = exs_redirect || exs_ctrl.is_csr || memq_wdata.expt.valid;
+    // ROBに登録された命令が直列化命令の場合，次の命令のROB登録を待つ
+    let serial_alloc: logic = rob_alloc_fire && exs_is_serializing;
 
     always_comb {
         // EX -> MEM
         // ROBだけallocationされたり MEM FIFOだけ書き込まれたりするのを防ぐ
-        rob_avalid  = exq_rvalid && exs_route_ready && !exs_stall && !control_hazard;
-        exq_rready  = rob_aready && exs_route_ready && !exs_stall && !control_hazard;
+        rob_avalid  = exq_rvalid && exs_route_ready && !exs_stall && !serial_pending && !control_hazard;
+        exq_rready  = rob_aready && exs_route_ready && !exs_stall && !serial_pending && !control_hazard;
         memq_wvalid = rob_alloc_fire && exs_needs_mem;
 
         memq_wdata.addr       = exq_rdata.addr;
@@ -443,8 +451,26 @@ module core (
     let mems_is_store   : logic = inst_is_store(mems_ctrl);
     let mems_at_rob_head: logic = rob_hvalid && rob_htag == memq_rdata.rob_tag;
 
-    // Storeでなければ実行してよい，StoreならROB先頭の場合だけ実行してよい
-    let mems_can_execute: logic = !mems_is_store || mems_at_rob_head;
+    // 命令が直列化命令（後続命令を確定できない命令）かどうか
+    let mems_is_serializing: logic = memq_rdata.br_taken || mems_ctrl.is_csr || mems_expt.valid;
+
+    // Storeまたは直列化命令ならROB先頭の場合だけ実行してよい
+    let mems_requires_head: logic = mems_is_store || mems_ctrl.is_csr || mems_expt.valid;
+    let mems_can_execute  : logic = !mems_requires_head || mems_at_rob_head;
+
+    let serial_complete: logic = rob_cvalid && mems_is_serializing;
+
+    always_ff {
+        if_reset {
+            serial_pending = 0;
+        } else {
+            if serial_complete {
+                serial_pending = 0;
+            } else if serial_alloc {
+                serial_pending = 1;
+            }
+        }
+    }
 
     var memu_rdata: UIntX;
     var memu_stall: logic;
@@ -641,7 +667,7 @@ module core (
 
     inst ex_mem_fifo: fifo #(
         DATA_TYPE: memq_type,
-        WIDTH    : 1        ,
+        WIDTH    : 2        ,
     ) (
         clk                   ,
         rst                   ,
