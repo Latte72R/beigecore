@@ -101,6 +101,13 @@ module core (
     var rob_hvalid: logic ;
     var rob_htag  : RobTag;
 
+    var rob_q1tag : RobTag        ;
+    var rob_q1done: logic         ;
+    var rob_q1data: rob_entry_type;
+    var rob_q2tag : RobTag        ;
+    var rob_q2done: logic         ;
+    var rob_q2data: rob_entry_type;
+
     ///////////////////////////////// IF Stage /////////////////////////////////
 
     var if_pc          : Addr ;
@@ -238,12 +245,13 @@ module core (
     // ROB内に存在する未コミットの書込み命令数
     var pending_writes: logic<ROB_WIDTH> [32];
 
+    // 各レジスタを最後に書く予定のROBエントリ
+    var producer_valid: logic  [32];
+    var producer_tag  : RobTag [32];
+
     // レジスタ番号
     let exs_rs1_addr: logic<5> = exs_inst_bits[19:15];
     let exs_rs2_addr: logic<5> = exs_inst_bits[24:20];
-    // ソースレジスタのデータ
-    let exs_rs1_data: UIntX = if exs_rs1_addr == 0 ? 0 : regfile[exs_rs1_addr];
-    let exs_rs2_data: UIntX = if exs_rs2_addr == 0 ? 0 : regfile[exs_rs2_addr];
 
     // データハザード
     let exs_uses_rs1: logic = case exs_ctrl.itype {
@@ -259,11 +267,23 @@ module core (
         InstType::B: 1,
         default    : 0,
     };
-    let exs_rs1_data_hazard: logic = exs_valid && exs_uses_rs1 && exs_rs1_addr != 0 && pending_writes[exs_rs1_addr]
-        != 0;
-    let exs_rs2_data_hazard: logic = exs_valid && exs_uses_rs2 && exs_rs2_addr != 0 && pending_writes[exs_rs2_addr]
-        != 0;
-    let exs_data_hazard    : logic = exs_rs1_data_hazard || exs_rs2_data_hazard;
+    let exs_rs1_has_producer: logic = exs_uses_rs1 && exs_rs1_addr != 0 && producer_valid[exs_rs1_addr];
+    let exs_rs2_has_producer: logic = exs_uses_rs2 && exs_rs2_addr != 0 && producer_valid[exs_rs2_addr];
+    let exs_rs1_data_hazard : logic = exs_valid && exs_rs1_has_producer && !rob_q1done;
+    let exs_rs2_data_hazard : logic = exs_valid && exs_rs2_has_producer && !rob_q2done;
+    let exs_data_hazard     : logic = exs_rs1_data_hazard || exs_rs2_data_hazard;
+
+    // ソースレジスタのデータ
+    let exs_rs1_data: UIntX = switch {
+        exs_rs1_addr == 0                 : 0,
+        exs_rs1_has_producer && rob_q1done: rob_q1data.result,
+        default                           : regfile[exs_rs1_addr],
+    };
+    let exs_rs2_data: UIntX = switch {
+        exs_rs2_addr == 0                 : 0,
+        exs_rs2_has_producer && rob_q2done: rob_q2data.result,
+        default                           : regfile[exs_rs2_addr],
+    };
 
     // ALU
     var exs_op1       : UIntX;
@@ -377,6 +397,9 @@ module core (
         };
         rob_adata.expt       = memq_wdata.expt;
         rob_adata.raise_trap = 0;
+
+        rob_q1tag = producer_tag[exs_rs1_addr];
+        rob_q2tag = producer_tag[exs_rs2_addr];
     }
 
     // 未解決の直列化命令がROB/MEM内にある
@@ -391,6 +414,8 @@ module core (
     let exs_is_serializing: logic = exs_redirect || exs_ctrl.is_csr || memq_wdata.expt.valid;
     // ROBに登録された命令が直列化命令の場合，次の命令のROB登録を待つ
     let serial_alloc: logic = rob_alloc_fire && exs_is_serializing;
+
+    let producer_alloc: logic = rob_alloc_fire && rob_adata.ctrl.rwb_en && rob_adata.rd_addr != 0;
 
     always_comb {
         // EX -> MEM
@@ -583,6 +608,29 @@ module core (
                 if pending_commit {
                     pending_writes[rob_rdata.rd_addr] -= 1;
                 }
+            }
+        }
+    }
+
+    let producer_commit: logic = rob_commit_fire && rob_rdata.ctrl.rwb_en && rob_rdata.rd_addr != 0;
+
+    always_ff {
+        if_reset {
+            for i in 0..32 {
+                producer_valid[i] = 0;
+                producer_tag[i]   = 0;
+            }
+        } else {
+            // 最新producer自身がcommitした場合だけ解除
+            if producer_commit && producer_valid[rob_rdata.rd_addr] && producer_tag[rob_rdata.rd_addr] == rob_htag
+                && !(producer_alloc && rob_adata.rd_addr == rob_rdata.rd_addr) {
+                producer_valid[rob_rdata.rd_addr] = 0;
+            }
+
+            // 同じサイクルなら新しいallocationを優先
+            if producer_alloc {
+                producer_valid[rob_adata.rd_addr] = 1;
+                producer_tag[rob_adata.rd_addr]   = rob_atag;
             }
         }
     }
@@ -780,5 +828,13 @@ module core (
 
         hvalid: rob_hvalid,
         htag  : rob_htag  ,
+
+        q1tag : rob_q1tag ,
+        q1done: rob_q1done,
+        q1data: rob_q1data,
+
+        q2tag : rob_q2tag ,
+        q2done: rob_q2done,
+        q2data: rob_q2data,
     );
 }

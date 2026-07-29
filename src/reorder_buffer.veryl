@@ -26,6 +26,14 @@ module reorder_buffer #(
     // head の情報（Storeの先頭判定につかう）
     hvalid: output logic       ,
     htag  : output logic<WIDTH>,
+
+    // rs1/rs2の依存解決のためにROBの中身を覗く
+    q1tag : input  logic    <WIDTH>,
+    q1done: output logic           ,
+    q1data: output DATA_TYPE       ,
+    q2tag : input  logic    <WIDTH>,
+    q2done: output logic           ,
+    q2data: output DATA_TYPE       ,
 ) {
     if WIDTH <= 1 :invalid_width {
         initial {
@@ -57,6 +65,12 @@ module reorder_buffer #(
             // allocate
             aready = !full || rfire;
             atag   = tail;
+
+            // query
+            q1done = completed[q1tag];
+            q1data = mem[q1tag];
+            q2done = completed[q2tag];
+            q2data = mem[q2tag];
         }
 
         #[allow(missing_reset_statement)]
