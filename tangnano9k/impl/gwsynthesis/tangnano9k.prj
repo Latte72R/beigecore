@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE gowin-synthesis-project>
+<Project>
+    <Version>beta</Version>
+    <Device id="GW1NR-9C" package="QFN88P" speed="6" partNumber="GW1NR-LV9QN88PC6/I5"/>
+    <FileList>
+        <File path="Z:\home\latte\core\target\util.sv" type="verilog"/>
+        <File path="Z:\home\latte\core\target\reorder_buffer.sv" type="verilog"/>
+        <File path="Z:\home\latte\core\target\fifo.sv" type="verilog"/>
+        <File path="Z:\home\latte\core\target\eei.sv" type="verilog"/>
+        <File path="Z:\home\latte\core\target\muldivunit.sv" type="verilog"/>
+        <File path="Z:\home\latte\core\target\membus_if.sv" type="verilog"/>
+        <File path="Z:\home\latte\core\target\memory.sv" type="verilog"/>
+        <File path="Z:\home\latte\core\target\mmio_controller.sv" type="verilog"/>
+        <File path="Z:\home\latte\core\target\corectrl.sv" type="verilog"/>
+        <File path="Z:\home\latte\core\target\inst_decoder.sv" type="verilog"/>
+        <File path="Z:\home\latte\core\target\csrunit.sv" type="verilog"/>
+        <File path="Z:\home\latte\core\target\memunit.sv" type="verilog"/>
+        <File path="Z:\home\latte\core\target\brunit.sv" type="verilog"/>
+        <File path="Z:\home\latte\core\target\alu.sv" type="verilog"/>
+        <File path="Z:\home\latte\core\target\core.sv" type="verilog"/>
+        <File path="Z:\home\latte\core\target\top.sv" type="verilog"/>
+        <File path="Z:\home\latte\core\target\top_tang.sv" type="verilog"/>
+    </FileList>
+    <OptionList>
+        <Option type="disable_insert_pad" value="0"/>
+        <Option type="dsp_style" value="auto"/>
+        <Option type="global_freq" value="50.000"/>
+        <Option type="looplimit" value="2000"/>
+        <Option type="map_option" value="1"/>
+        <Option type="max_fanout" value="1000"/>
+        <Option type="netlist_hierarchy" value="1"/>
+        <Option type="opt_goal" value="auto"/>
+        <Option type="output_file" value="Z:\home\latte\core\tangnano9k\impl\gwsynthesis\tangnano9k.vg"/>
+        <Option type="print_all_synthesis_warning" value="0"/>
+        <Option type="ram_rw_check" value="0"/>
+        <Option type="ram_style" value="auto"/>
+        <Option type="rom_style" value="auto"/>
+        <Option type="shift_reg" value="auto"/>
+        <Option type="top_module" value="core_top_tang"/>
+        <Option type="vcc" value="1.2"/>
+        <Option type="verilog_language" value="sysv-2017"/>
+        <Option type="vhdl_language" value="vhdl-1993"/>
+    </OptionList>
+</Project>

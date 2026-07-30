@@ -1,0 +1,80 @@
+GowinSynthesis start
+Running parser ...
+Analyzing Verilog file 'Z:\home\latte\core\target\util.sv'
+Analyzing Verilog file 'Z:\home\latte\core\target\reorder_buffer.sv'
+Analyzing Verilog file 'Z:\home\latte\core\target\fifo.sv'
+Analyzing Verilog file 'Z:\home\latte\core\target\eei.sv'
+Analyzing Verilog file 'Z:\home\latte\core\target\muldivunit.sv'
+Analyzing Verilog file 'Z:\home\latte\core\target\membus_if.sv'
+Analyzing Verilog file 'Z:\home\latte\core\target\memory.sv'
+Analyzing Verilog file 'Z:\home\latte\core\target\mmio_controller.sv'
+Analyzing Verilog file 'Z:\home\latte\core\target\corectrl.sv'
+Analyzing Verilog file 'Z:\home\latte\core\target\inst_decoder.sv'
+Analyzing Verilog file 'Z:\home\latte\core\target\csrunit.sv'
+Analyzing Verilog file 'Z:\home\latte\core\target\memunit.sv'
+Analyzing Verilog file 'Z:\home\latte\core\target\brunit.sv'
+Analyzing Verilog file 'Z:\home\latte\core\target\alu.sv'
+Analyzing Verilog file 'Z:\home\latte\core\target\core.sv'
+Analyzing Verilog file 'Z:\home\latte\core\target\top.sv'
+Analyzing Verilog file 'Z:\home\latte\core\target\top_tang.sv'
+Compiling module 'core_top_tang'("Z:\home\latte\core\target\top_tang.sv":2)
+Compiling module 'core_top(RAM_FILEPATH_IS_ENV=1'b0,RAM_FILEPATH="",ROM_FILEPATH_IS_ENV=1'b0,ROM_FILEPATH="Z:\home\latte\core\test\led.hex")'("Z:\home\latte\core\target\top.sv":3)
+Compiling module 'core___memory__eei_RAM_DATA_WIDTH__eei_RAM_ADDR_WIDTH(FILEPATH_IS_ENV=1'b0,membus=core___membus_if__eei_RAM_DATA_WIDTH__eei_RAM_ADDR_WIDTH_slave)'("Z:\home\latte\core\target\memory.sv":1)
+Extracting RAM for identifier 'mem'("Z:\home\latte\core\target\memory.sv":10)
+Compiling module 'core___memory__eei_ROM_DATA_WIDTH__eei_ROM_ADDR_WIDTH(FILEPATH_IS_ENV=1'b0,FILEPATH="Z:\home\latte\core\test\led.hex",membus=core___membus_if__eei_ROM_DATA_WIDTH__eei_ROM_ADDR_WIDTH_slave)'("Z:\home\latte\core\target\memory.sv":69)
+Extracting RAM for identifier 'mem'("Z:\home\latte\core\target\memory.sv":78)
+Compiling module 'core_mmio_controller(req_core=core___membus_if__eei_MEMBUS_DATA_WIDTH__eei_XLEN_slave,ram_membus=core___membus_if__eei_MEMBUS_DATA_WIDTH__eei_XLEN_master,rom_membus=core___membus_if__eei_MEMBUS_DATA_WIDTH__eei_XLEN_master,dbg_membus=core___membus_if__eei_MEMBUS_DATA_WIDTH__eei_XLEN_master)'("Z:\home\latte\core\target\mmio_controller.sv":3)
+Compiling module 'core_core(i_membus=core___membus_if__eei_ILEN__eei_XLEN_master,d_membus=core___membus_if__eei_MEMBUS_DATA_WIDTH__eei_XLEN_master)'("Z:\home\latte\core\target\core.sv":4)
+Extracting RAM for identifier 'regfile'("Z:\home\latte\core\target\core.sv":246)
+Compiling module 'core_fifo(DATA_TYPE=core_core(i_membus=core___membus_if__eei_ILEN__eei_XLEN_master,d_membus=core___membus_if__eei_MEMBUS_DATA_WIDTH__eei_XLEN_master)_if_fifo_type,WIDTH=32'b00000000000000000000000000000011)'("Z:\home\latte\core\target\fifo.sv":1)
+Extracting RAM for identifier 'mem'("Z:\home\latte\core\target\fifo.sv":48)
+WARN  (EX3791) : Expression size 4 truncated to fit in target size 3("Z:\home\latte\core\target\fifo.sv":68)
+WARN  (EX3791) : Expression size 4 truncated to fit in target size 3("Z:\home\latte\core\target\fifo.sv":71)
+Compiling module 'core_inst_decoder'("Z:\home\latte\core\target\inst_decoder.sv":4)
+Compiling module 'core_alu'("Z:\home\latte\core\target\alu.sv":4)
+Compiling module 'core_muldivunit'("Z:\home\latte\core\target\muldivunit.sv":3)
+Compiling module 'core_mulunit(WIDTH=32'b00000000000000000000000001000000)'("Z:\home\latte\core\target\muldivunit.sv":256)
+Compiling module 'core_divunit(WIDTH=32'b00000000000000000000000001000000)'("Z:\home\latte\core\target\muldivunit.sv":398)
+Compiling module 'core_brunit'("Z:\home\latte\core\target\brunit.sv":4)
+Compiling module 'core_memunit(membus=core___membus_if__eei_MEMBUS_DATA_WIDTH__eei_XLEN_master)'("Z:\home\latte\core\target\memunit.sv":4)
+Compiling module 'core_csrunit'("Z:\home\latte\core\target\csrunit.sv":4)
+Compiling module 'core_fifo(DATA_TYPE=core_core(i_membus=core___membus_if__eei_ILEN__eei_XLEN_master,d_membus=core___membus_if__eei_MEMBUS_DATA_WIDTH__eei_XLEN_master)_exq_type,WIDTH=32'b00000000000000000000000000000010)'("Z:\home\latte\core\target\fifo.sv":1)
+Extracting RAM for identifier 'mem'("Z:\home\latte\core\target\fifo.sv":48)
+WARN  (EX3791) : Expression size 3 truncated to fit in target size 2("Z:\home\latte\core\target\fifo.sv":68)
+WARN  (EX3791) : Expression size 3 truncated to fit in target size 2("Z:\home\latte\core\target\fifo.sv":71)
+Compiling module 'core_fifo(DATA_TYPE=core_core(i_membus=core___membus_if__eei_ILEN__eei_XLEN_master,d_membus=core___membus_if__eei_MEMBUS_DATA_WIDTH__eei_XLEN_master)_memq_type,WIDTH=32'b00000000000000000000000000000010)'("Z:\home\latte\core\target\fifo.sv":1)
+Extracting RAM for identifier 'mem'("Z:\home\latte\core\target\fifo.sv":48)
+WARN  (EX3791) : Expression size 3 truncated to fit in target size 2("Z:\home\latte\core\target\fifo.sv":68)
+WARN  (EX3791) : Expression size 3 truncated to fit in target size 2("Z:\home\latte\core\target\fifo.sv":71)
+Compiling module 'core_reorder_buffer(DATA_TYPE=core_core(i_membus=core___membus_if__eei_ILEN__eei_XLEN_master,d_membus=core___membus_if__eei_MEMBUS_DATA_WIDTH__eei_XLEN_master)_rob_entry_type,WIDTH=32'b00000000000000000000000000000010)'("Z:\home\latte\core\target\reorder_buffer.sv":1)
+Extracting RAM for identifier 'mem'("Z:\home\latte\core\target\reorder_buffer.sv":53)
+Extracting RAM for identifier 'completed'("Z:\home\latte\core\target\reorder_buffer.sv":54)
+WARN  (EX3791) : Expression size 3 truncated to fit in target size 2("Z:\home\latte\core\target\reorder_buffer.sv":91)
+WARN  (EX3791) : Expression size 3 truncated to fit in target size 2("Z:\home\latte\core\target\reorder_buffer.sv":99)
+WARN  (EX3670) : Actual bit length 32 differs from formal bit length 1 for port 'flush'("Z:\home\latte\core\target\core.sv":823)
+WARN  (EX3858) : System task 'write' is ignored for synthesis("Z:\home\latte\core\target\top.sv":159)
+WARN  (EX3858) : System task 'display' is ignored for synthesis("Z:\home\latte\core\target\top.sv":161)
+WARN  (EX3858) : System task 'display' is ignored for synthesis("Z:\home\latte\core\target\top.sv":168)
+WARN  (EX3858) : System task 'display' is ignored for synthesis("Z:\home\latte\core\target\top.sv":170)
+WARN  (EX2488) : Severity system task 'error' is ignored for synthesis("Z:\home\latte\core\target\top.sv":171)
+WARN  (EX3858) : System task 'finish' is ignored for synthesis("Z:\home\latte\core\target\top.sv":173)
+WARN  (EX3670) : Actual bit length 32 differs from formal bit length 64 for port 'MMAP_DBG_ADDR'("Z:\home\latte\core\target\top_tang.sv":26)
+NOTE  (EX0101) : Current top module is "core_top_tang"
+[5%] Running netlist conversion ...
+Running device independent optimization ...
+[10%] Optimizing Phase 0 completed
+[15%] Optimizing Phase 1 completed
+[25%] Optimizing Phase 2 completed
+Running inference ...
+[30%] Inferring Phase 0 completed
+[40%] Inferring Phase 1 completed
+[50%] Inferring Phase 2 completed
+[55%] Inferring Phase 3 completed
+Running technical mapping ...
+[60%] Tech-Mapping Phase 0 completed
+[65%] Tech-Mapping Phase 1 completed
+[75%] Tech-Mapping Phase 2 completed
+[80%] Tech-Mapping Phase 3 completed
+[90%] Tech-Mapping Phase 4 completed
+ERROR (RP0006) : The number(20880(19663 LUTs, 833 ALUs, 0 ROM16s, 64 SSRAMs)) of logic in the design exceeds the resource limit(8640) of current device
+GowinSynthesis finish

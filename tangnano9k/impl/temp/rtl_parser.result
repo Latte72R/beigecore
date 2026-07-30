@@ -1,0 +1,154 @@
+[
+    {
+        "InstFile": "Z:/home/latte/core/target/top_tang.sv",
+        "InstLine": 2,
+        "InstName": "core_top_tang",
+        "ModuleFile": "Z:/home/latte/core/target/top_tang.sv",
+        "ModuleLine": 2,
+        "ModuleName": "core_top_tang",
+        "SubInsts": [
+            {
+                "InstFile": "Z:/home/latte/core/target/top_tang.sv",
+                "InstLine": 19,
+                "InstName": "t",
+                "ModuleFile": "Z:/home/latte/core/target/top.sv",
+                "ModuleLine": 3,
+                "ModuleName": "core_top",
+                "SubInsts": [
+                    {
+                        "InstFile": "Z:/home/latte/core/target/top.sv",
+                        "InstLine": 110,
+                        "InstName": "ram",
+                        "ModuleFile": "Z:/home/latte/core/target/memory.sv",
+                        "ModuleLine": 1,
+                        "ModuleName": "core___memory__eei_RAM_DATA_WIDTH__eei_RAM_ADDR_WIDTH"
+                    },
+                    {
+                        "InstFile": "Z:/home/latte/core/target/top.sv",
+                        "InstLine": 119,
+                        "InstName": "rom",
+                        "ModuleFile": "Z:/home/latte/core/target/memory.sv",
+                        "ModuleLine": 69,
+                        "ModuleName": "core___memory__eei_ROM_DATA_WIDTH__eei_ROM_ADDR_WIDTH"
+                    },
+                    {
+                        "InstFile": "Z:/home/latte/core/target/top.sv",
+                        "InstLine": 125,
+                        "InstName": "mmioc",
+                        "ModuleFile": "Z:/home/latte/core/target/mmio_controller.sv",
+                        "ModuleLine": 3,
+                        "ModuleName": "core_mmio_controller"
+                    },
+                    {
+                        "InstFile": "Z:/home/latte/core/target/top.sv",
+                        "InstLine": 135,
+                        "InstName": "c",
+                        "ModuleFile": "Z:/home/latte/core/target/core.sv",
+                        "ModuleLine": 4,
+                        "ModuleName": "core_core",
+                        "SubInsts": [
+                            {
+                                "InstFile": "Z:/home/latte/core/target/core.sv",
+                                "InstLine": 128,
+                                "InstName": "if_fifo",
+                                "ModuleFile": "Z:/home/latte/core/target/fifo.sv",
+                                "ModuleLine": 1,
+                                "ModuleName": "core_fifo"
+                            },
+                            {
+                                "InstFile": "Z:/home/latte/core/target/core.sv",
+                                "InstLine": 202,
+                                "InstName": "decoder",
+                                "ModuleFile": "Z:/home/latte/core/target/inst_decoder.sv",
+                                "ModuleLine": 4,
+                                "ModuleName": "core_inst_decoder"
+                            },
+                            {
+                                "InstFile": "Z:/home/latte/core/target/core.sv",
+                                "InstLine": 327,
+                                "InstName": "alum",
+                                "ModuleFile": "Z:/home/latte/core/target/alu.sv",
+                                "ModuleLine": 4,
+                                "ModuleName": "core_alu"
+                            },
+                            {
+                                "InstFile": "Z:/home/latte/core/target/core.sv",
+                                "InstLine": 341,
+                                "InstName": "mdu",
+                                "ModuleFile": "Z:/home/latte/core/target/muldivunit.sv",
+                                "ModuleLine": 3,
+                                "ModuleName": "core_muldivunit",
+                                "SubInsts": [
+                                    {
+                                        "InstFile": "Z:/home/latte/core/target/muldivunit.sv",
+                                        "InstLine": 99,
+                                        "InstName": "mu",
+                                        "ModuleFile": "Z:/home/latte/core/target/muldivunit.sv",
+                                        "ModuleLine": 256,
+                                        "ModuleName": "core_mulunit"
+                                    },
+                                    {
+                                        "InstFile": "Z:/home/latte/core/target/muldivunit.sv",
+                                        "InstLine": 156,
+                                        "InstName": "du",
+                                        "ModuleFile": "Z:/home/latte/core/target/muldivunit.sv",
+                                        "ModuleLine": 398,
+                                        "ModuleName": "core_divunit"
+                                    }
+                                ]
+                            },
+                            {
+                                "InstFile": "Z:/home/latte/core/target/core.sv",
+                                "InstLine": 389,
+                                "InstName": "bru",
+                                "ModuleFile": "Z:/home/latte/core/target/brunit.sv",
+                                "ModuleLine": 4,
+                                "ModuleName": "core_brunit"
+                            },
+                            {
+                                "InstFile": "Z:/home/latte/core/target/core.sv",
+                                "InstLine": 534,
+                                "InstName": "memu",
+                                "ModuleFile": "Z:/home/latte/core/target/memunit.sv",
+                                "ModuleLine": 4,
+                                "ModuleName": "core_memunit"
+                            },
+                            {
+                                "InstFile": "Z:/home/latte/core/target/core.sv",
+                                "InstLine": 550,
+                                "InstName": "csru",
+                                "ModuleFile": "Z:/home/latte/core/target/csrunit.sv",
+                                "ModuleLine": 4,
+                                "ModuleName": "core_csrunit"
+                            },
+                            {
+                                "InstFile": "Z:/home/latte/core/target/core.sv",
+                                "InstLine": 788,
+                                "InstName": "id_ex_fifo",
+                                "ModuleFile": "Z:/home/latte/core/target/fifo.sv",
+                                "ModuleLine": 1,
+                                "ModuleName": "core_fifo"
+                            },
+                            {
+                                "InstFile": "Z:/home/latte/core/target/core.sv",
+                                "InstLine": 804,
+                                "InstName": "ex_mem_fifo",
+                                "ModuleFile": "Z:/home/latte/core/target/fifo.sv",
+                                "ModuleLine": 1,
+                                "ModuleName": "core_fifo"
+                            },
+                            {
+                                "InstFile": "Z:/home/latte/core/target/core.sv",
+                                "InstLine": 820,
+                                "InstName": "rob",
+                                "ModuleFile": "Z:/home/latte/core/target/reorder_buffer.sv",
+                                "ModuleLine": 1,
+                                "ModuleName": "core_reorder_buffer"
+                            }
+                        ]
+                    }
+                ]
+            }
+        ]
+    }
+]

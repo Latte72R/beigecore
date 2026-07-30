@@ -1,0 +1,27 @@
+import eei::*;
+module top_tang (
+    clk: input  clock   ,
+    rst: input  reset   ,
+    led: output logic<6>,
+) {
+    // CSRの下位ビットをLEDに接続する
+    var led_top: UIntX;
+    always_comb {
+        led = led_top[5:0];
+    }
+    inst t: top #(
+        RAM_FILEPATH_IS_ENV: 0                                ,
+        RAM_FILEPATH       : ""                               ,
+        ROM_FILEPATH_IS_ENV: 0                                ,
+        ROM_FILEPATH       : "Z:/home/latte/core/test/led.hex",
+    ) (
+        #[ifdef(TEST_MODE)]
+        test_success: _,
+        #[ifdef(TEST_MODE)]
+        test_tohost_addr: 0      ,
+        MMAP_DBG_ADDR   : 0      ,
+        clk                      ,
+        rst                      ,
+        led             : led_top,
+    );
+}
