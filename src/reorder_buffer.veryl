@@ -7,33 +7,33 @@ module reorder_buffer #(
     flush: input logic,
 
     // EXから新しい命令を登録する (allocate)
-    avalid: input  logic           ,
-    aready: output logic           ,
-    adone : input  logic           ,
-    adata : input  DATA_TYPE       ,
-    atag  : output logic    <WIDTH>,
+    allocate_valid: input  logic           ,
+    allocate_ready: output logic           ,
+    allocate_done : input  logic           ,
+    allocate_data : input  DATA_TYPE       ,
+    allocate_tag  : output logic    <WIDTH>,
 
     // MEMなどから実行結果を埋める (complete)
-    cvalid: input logic           ,
-    ctag  : input logic    <WIDTH>,
-    cdata : input DATA_TYPE       ,
+    complete_valid: input logic           ,
+    complete_tag  : input logic    <WIDTH>,
+    complete_data : input DATA_TYPE       ,
 
     // 先頭の完成済み命令を読みだす (commit)
-    rvalid: output logic    ,
-    rready: input  logic    ,
-    rdata : output DATA_TYPE,
+    commit_valid: output logic    ,
+    commit_ready: input  logic    ,
+    commit_data : output DATA_TYPE,
 
     // head の情報（Storeの先頭判定につかう）
-    hvalid: output logic       ,
-    htag  : output logic<WIDTH>,
+    head_valid: output logic       ,
+    head_tag  : output logic<WIDTH>,
 
     // rs1/rs2の依存解決のためにROBの中身を覗く
-    q1tag : input  logic    <WIDTH>,
-    q1done: output logic           ,
-    q1data: output DATA_TYPE       ,
-    q2tag : input  logic    <WIDTH>,
-    q2done: output logic           ,
-    q2data: output DATA_TYPE       ,
+    query1_tag : input  logic    <WIDTH>,
+    query1_done: output logic           ,
+    query1_data: output DATA_TYPE       ,
+    query2_tag : input  logic    <WIDTH>,
+    query2_done: output logic           ,
+    query2_data: output DATA_TYPE       ,
 ) {
     if WIDTH <= 1 :invalid_width {
         initial {
@@ -47,33 +47,33 @@ module reorder_buffer #(
         let full      : logic        = tail_plus1 == head;
 
         // 実際に成立（発火）したか
-        let rfire: logic = rvalid && rready;
-        let afire: logic = avalid && aready;
+        let commit_fire  : logic = commit_valid && commit_ready;
+        let allocate_fire: logic = allocate_valid && allocate_ready;
 
         var mem      : DATA_TYPE [2 ** WIDTH];
         var completed: logic     [2 ** WIDTH];
 
-        let q1completing: logic = cvalid && ctag == q1tag;
-        let q2completing: logic = cvalid && ctag == q2tag;
+        let query1_completing: logic = complete_valid && complete_tag == query1_tag;
+        let query2_completing: logic = complete_valid && complete_tag == query2_tag;
 
         always_comb {
             // ROB head
-            hvalid = head != tail;
-            htag   = head;
+            head_valid = head != tail;
+            head_tag   = head;
 
             // commit
-            rvalid = hvalid && completed[head];
-            rdata  = mem[head];
+            commit_valid = head_valid && completed[head];
+            commit_data  = mem[head];
 
             // allocate
-            aready = !full || rfire;
-            atag   = tail;
+            allocate_ready = !full || commit_fire;
+            allocate_tag   = tail;
 
             // query
-            q1done = completed[q1tag] || q1completing;
-            q1data = if q1completing ? cdata : mem[q1tag];
-            q2done = completed[q2tag] || q2completing;
-            q2data = if q2completing ? cdata : mem[q2tag];
+            query1_done = completed[query1_tag] || query1_completing;
+            query1_data = if query1_completing ? complete_data : mem[query1_tag];
+            query2_done = completed[query2_tag] || query2_completing;
+            query2_data = if query2_completing ? complete_data : mem[query2_tag];
         }
 
         #[allow(missing_reset_statement)]
@@ -86,16 +86,16 @@ module reorder_buffer #(
                     head = 0;
                     tail = 0;
                 } else {
-                    if afire {
-                        mem[tail]       = adata;
-                        completed[tail] = adone;
+                    if allocate_fire {
+                        mem[tail]       = allocate_data;
+                        completed[tail] = allocate_done;
                         tail            = tail + 1;
                     }
-                    if cvalid {
-                        mem[ctag]       = cdata;
-                        completed[ctag] = 1;
+                    if complete_valid {
+                        mem[complete_tag]       = complete_data;
+                        completed[complete_tag] = 1;
                     }
-                    if rfire {
+                    if commit_fire {
                         completed[head] = 0;
                         head            = head + 1;
                     }

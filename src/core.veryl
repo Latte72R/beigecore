@@ -84,29 +84,29 @@ module core (
     var memq_rdata : memq_type;
 
     // (EX, MEM) -> WB の Reorder Buffer
-    var rob_avalid: logic         ;
-    var rob_aready: logic         ;
-    var rob_adone : logic         ;
-    var rob_adata : rob_entry_type;
-    var rob_atag  : RobTag        ;
+    var rob_allocate_valid: logic         ;
+    var rob_allocate_ready: logic         ;
+    var rob_allocate_done : logic         ;
+    var rob_allocate_data : rob_entry_type;
+    var rob_allocate_tag  : RobTag        ;
 
-    var rob_cvalid: logic         ;
-    var rob_ctag  : RobTag        ;
-    var rob_cdata : rob_entry_type;
+    var rob_complete_valid: logic         ;
+    var rob_complete_tag  : RobTag        ;
+    var rob_complete_data : rob_entry_type;
 
-    var rob_rvalid: logic         ;
-    var rob_rready: logic         ;
-    var rob_rdata : rob_entry_type;
+    var rob_commit_valid: logic         ;
+    var rob_commit_ready: logic         ;
+    var rob_commit_data : rob_entry_type;
 
-    var rob_hvalid: logic ;
-    var rob_htag  : RobTag;
+    var rob_head_valid: logic ;
+    var rob_head_tag  : RobTag;
 
-    var rob_q1tag : RobTag        ;
-    var rob_q1done: logic         ;
-    var rob_q1data: rob_entry_type;
-    var rob_q2tag : RobTag        ;
-    var rob_q2done: logic         ;
-    var rob_q2data: rob_entry_type;
+    var rob_query1_tag : RobTag        ;
+    var rob_query1_done: logic         ;
+    var rob_query1_data: rob_entry_type;
+    var rob_query2_tag : RobTag        ;
+    var rob_query2_done: logic         ;
+    var rob_query2_data: rob_entry_type;
 
     ///////////////////////////////// IF Stage /////////////////////////////////
 
@@ -266,20 +266,20 @@ module core (
     };
     let exs_rs1_has_producer: logic = exs_uses_rs1 && exs_rs1_addr != 0 && producer_valid[exs_rs1_addr];
     let exs_rs2_has_producer: logic = exs_uses_rs2 && exs_rs2_addr != 0 && producer_valid[exs_rs2_addr];
-    let exs_rs1_data_hazard : logic = exs_valid && exs_rs1_has_producer && !rob_q1done;
-    let exs_rs2_data_hazard : logic = exs_valid && exs_rs2_has_producer && !rob_q2done;
+    let exs_rs1_data_hazard : logic = exs_valid && exs_rs1_has_producer && !rob_query1_done;
+    let exs_rs2_data_hazard : logic = exs_valid && exs_rs2_has_producer && !rob_query2_done;
     let exs_data_hazard     : logic = exs_rs1_data_hazard || exs_rs2_data_hazard;
 
     // ソースレジスタのデータ
     let exs_rs1_data: UIntX = switch {
-        exs_rs1_addr == 0                 : 0,
-        exs_rs1_has_producer && rob_q1done: rob_q1data.result,
-        default                           : regfile[exs_rs1_addr],
+        exs_rs1_addr == 0                      : 0,
+        exs_rs1_has_producer && rob_query1_done: rob_query1_data.result,
+        default                                : regfile[exs_rs1_addr],
     };
     let exs_rs2_data: UIntX = switch {
-        exs_rs2_addr == 0                 : 0,
-        exs_rs2_has_producer && rob_q2done: rob_q2data.result,
-        default                           : regfile[exs_rs2_addr],
+        exs_rs2_addr == 0                      : 0,
+        exs_rs2_has_producer && rob_query2_done: rob_query2_data.result,
+        default                                : regfile[exs_rs2_addr],
     };
 
     // ALU
@@ -382,21 +382,21 @@ module core (
         || exq_rdata.expt.valid;
 
     always_comb {
-        rob_adone         = !exs_needs_mem;
-        rob_adata.addr    = exq_rdata.addr;
-        rob_adata.bits    = exq_rdata.bits;
-        rob_adata.ctrl    = exq_rdata.ctrl;
-        rob_adata.rd_addr = exq_rdata.bits[11:7];
-        rob_adata.result  = switch {
+        rob_allocate_done         = !exs_needs_mem;
+        rob_allocate_data.addr    = exq_rdata.addr;
+        rob_allocate_data.bits    = exq_rdata.bits;
+        rob_allocate_data.ctrl    = exq_rdata.ctrl;
+        rob_allocate_data.rd_addr = exq_rdata.bits[11:7];
+        rob_allocate_data.result  = switch {
             exs_ctrl.is_lui   : exq_rdata.imm,
             exs_ctrl.is_muldiv: exs_muldiv_result,
             default           : exs_alu_result,
         };
-        rob_adata.expt       = memq_wdata.expt;
-        rob_adata.raise_trap = 0;
+        rob_allocate_data.expt       = memq_wdata.expt;
+        rob_allocate_data.raise_trap = 0;
 
-        rob_q1tag = producer_tag[exs_rs1_addr];
-        rob_q2tag = producer_tag[exs_rs2_addr];
+        rob_query1_tag = producer_tag[exs_rs1_addr];
+        rob_query2_tag = producer_tag[exs_rs2_addr];
     }
 
     // 未解決の直列化命令がROB/MEM内にある
@@ -405,21 +405,21 @@ module core (
     // 命令が進む経路に空きがあるか
     let exs_route_ready: logic = !exs_needs_mem || memq_wready;
     // EX段の命令がROBへ実際に登録された
-    let rob_alloc_fire: logic = rob_avalid && rob_aready;
+    let rob_allocate_fire: logic = rob_allocate_valid && rob_allocate_ready;
     // ROBに登録された命令が直列化命令（後続命令を確定できない命令）かどうか
     let exs_redirect      : logic = exs_ctrl.is_jump || (inst_is_br(exs_ctrl) && exs_brunit_take);
     let exs_is_serializing: logic = exs_redirect || exs_ctrl.is_csr || memq_wdata.expt.valid;
     // ROBに登録された命令が直列化命令の場合，次の命令のROB登録を待つ
-    let serial_alloc: logic = rob_alloc_fire && exs_is_serializing;
+    let serial_allocate: logic = rob_allocate_fire && exs_is_serializing;
 
-    let producer_alloc: logic = rob_alloc_fire && rob_adata.ctrl.rwb_en && rob_adata.rd_addr != 0;
+    let producer_allocate: logic = rob_allocate_fire && rob_allocate_data.ctrl.rwb_en && rob_allocate_data.rd_addr != 0;
 
     always_comb {
         // EX -> MEM
         // ROBだけallocationされたり MEM FIFOだけ書き込まれたりするのを防ぐ
-        rob_avalid  = exq_rvalid && exs_route_ready && !exs_stall && !serial_pending && !control_hazard;
-        exq_rready  = rob_aready && exs_route_ready && !exs_stall && !serial_pending && !control_hazard;
-        memq_wvalid = rob_alloc_fire && exs_needs_mem;
+        rob_allocate_valid = exq_rvalid && exs_route_ready && !exs_stall && !serial_pending && !control_hazard;
+        exq_rready         = rob_allocate_ready && exs_route_ready && !exs_stall && !serial_pending && !control_hazard;
+        memq_wvalid        = rob_allocate_fire && exs_needs_mem;
 
         memq_wdata.addr       = exq_rdata.addr;
         memq_wdata.bits       = exq_rdata.bits;
@@ -431,7 +431,7 @@ module core (
         memq_wdata.alu_result = if exs_ctrl.is_muldiv ? exs_muldiv_result : exs_alu_result;
         memq_wdata.br_taken   = exs_ctrl.is_jump || inst_is_br(exs_ctrl) && exs_brunit_take;
         memq_wdata.jump_addr  = if inst_is_br(exs_ctrl) ? exs_pc + exs_imm : exs_alu_result & ~1;
-        memq_wdata.rob_tag    = rob_atag;
+        memq_wdata.rob_tag    = rob_allocate_tag;
 
         // exception
         let instruction_address_misaligned: logic = memq_wdata.br_taken && memq_wdata.jump_addr[1:0] != 2'b00;
@@ -471,7 +471,7 @@ module core (
     let mems_rd_addr  : logic        <5> = mems_inst_bits[11:7];
 
     let mems_is_store   : logic = inst_is_store(mems_ctrl);
-    let mems_at_rob_head: logic = rob_hvalid && rob_htag == memq_rdata.rob_tag;
+    let mems_at_rob_head: logic = rob_head_valid && rob_head_tag == memq_rdata.rob_tag;
 
     // 命令が直列化命令（後続命令を確定できない命令）かどうか
     let mems_is_serializing: logic = memq_rdata.br_taken || mems_ctrl.is_csr || mems_expt.valid;
@@ -480,7 +480,7 @@ module core (
     let mems_requires_head: logic = mems_is_store || mems_ctrl.is_csr || mems_expt.valid;
     let mems_can_execute  : logic = !mems_requires_head || mems_at_rob_head;
 
-    let serial_complete: logic = rob_cvalid && mems_is_serializing;
+    let serial_complete: logic = rob_complete_valid && mems_is_serializing;
 
     always_ff {
         if_reset {
@@ -488,7 +488,7 @@ module core (
         } else {
             if serial_complete {
                 serial_pending = 0;
-            } else if serial_alloc {
+            } else if serial_allocate {
                 serial_pending = 1;
             }
         }
@@ -533,16 +533,16 @@ module core (
 
     always_comb {
         // MEM -> WB
-        memq_rready = mems_can_execute && !memu_stall;
-        rob_cvalid  = memq_rvalid && mems_can_execute && !memu_stall;
-        rob_ctag    = memq_rdata.rob_tag;
+        memq_rready        = mems_can_execute && !memu_stall;
+        rob_complete_valid = memq_rvalid && mems_can_execute && !memu_stall;
+        rob_complete_tag   = memq_rdata.rob_tag;
 
-        rob_cdata.addr    = memq_rdata.addr;
-        rob_cdata.bits    = memq_rdata.bits;
-        rob_cdata.ctrl    = memq_rdata.ctrl;
-        rob_cdata.rd_addr = memq_rdata.bits[11:7];
+        rob_complete_data.addr    = memq_rdata.addr;
+        rob_complete_data.bits    = memq_rdata.bits;
+        rob_complete_data.ctrl    = memq_rdata.ctrl;
+        rob_complete_data.rd_addr = memq_rdata.bits[11:7];
 
-        rob_cdata.result = switch {
+        rob_complete_data.result = switch {
             mems_ctrl.is_lui : memq_rdata.imm,
             mems_ctrl.is_jump: memq_rdata.addr + 4,
             mems_ctrl.is_load: memu_rdata,
@@ -550,8 +550,8 @@ module core (
             default          : memq_rdata.alu_result
         };
 
-        rob_cdata.expt       = memq_rdata.expt;
-        rob_cdata.raise_trap = csru_raise_trap;
+        rob_complete_data.expt       = memq_rdata.expt;
+        rob_complete_data.raise_trap = csru_raise_trap;
     }
 
     always_comb {
@@ -562,29 +562,30 @@ module core (
 
     ///////////////////////////////// WB Stage /////////////////////////////////
 
-    let wbs_valid  : logic       = rob_rvalid;
-    let wbs_ctrl   : InstCtrl    = rob_rdata.ctrl;
-    let wbs_rd_addr: logic   <5> = rob_rdata.rd_addr;
-    let wbs_wb_data: UIntX       = rob_rdata.result;
+    let wbs_valid  : logic       = rob_commit_valid;
+    let wbs_ctrl   : InstCtrl    = rob_commit_data.ctrl;
+    let wbs_rd_addr: logic   <5> = rob_commit_data.rd_addr;
+    let wbs_wb_data: UIntX       = rob_commit_data.result;
 
     always_ff {
         // ROB先頭が完成済み & コミットが成立 & レジスタ書込み命令 & x0ではない & trapではない
-        if rob_rvalid && rob_rready && rob_rdata.ctrl.rwb_en && rob_rdata.rd_addr != 0 && !rob_rdata.raise_trap {
-            regfile[rob_rdata.rd_addr] = rob_rdata.result;
+        if rob_commit_valid && rob_commit_ready && rob_commit_data.ctrl.rwb_en && rob_commit_data.rd_addr != 0
+            && !rob_commit_data.raise_trap {
+            regfile[rob_commit_data.rd_addr] = rob_commit_data.result;
         }
     }
 
     always_comb {
         // WB -> END
-        rob_rready = 1;
+        rob_commit_ready = 1;
     }
 
     ///////////////////////////////// Pending Writes /////////////////////////////////
 
     // ROB先頭命令が実際にコミットされた
-    let rob_commit_fire: logic = rob_rvalid && rob_rready;
+    let rob_commit_fire: logic = rob_commit_valid && rob_commit_ready;
 
-    let producer_commit: logic = rob_commit_fire && rob_rdata.ctrl.rwb_en && rob_rdata.rd_addr != 0;
+    let producer_commit: logic = rob_commit_fire && rob_commit_data.ctrl.rwb_en && rob_commit_data.rd_addr != 0;
 
     always_ff {
         if_reset {
@@ -594,15 +595,15 @@ module core (
             }
         } else {
             // 最新producer自身がcommitした場合だけ解除
-            if producer_commit && producer_valid[rob_rdata.rd_addr] && producer_tag[rob_rdata.rd_addr] == rob_htag
-                && !(producer_alloc && rob_adata.rd_addr == rob_rdata.rd_addr) {
-                producer_valid[rob_rdata.rd_addr] = 0;
+            if producer_commit && producer_valid[rob_commit_data.rd_addr] && producer_tag[rob_commit_data.rd_addr]
+                == rob_head_tag && !(producer_allocate && rob_allocate_data.rd_addr == rob_commit_data.rd_addr) {
+                producer_valid[rob_commit_data.rd_addr] = 0;
             }
 
             // 同じサイクルなら新しいallocationを優先
-            if producer_alloc {
-                producer_valid[rob_adata.rd_addr] = 1;
-                producer_tag[rob_adata.rd_addr]   = rob_atag;
+            if producer_allocate {
+                producer_valid[rob_allocate_data.rd_addr] = 1;
+                producer_tag[rob_allocate_data.rd_addr]   = rob_allocate_tag;
             }
         }
     }
@@ -647,7 +648,7 @@ module core (
 
                 perf_cycles += 1;
 
-                if rob_alloc_fire {
+                if rob_allocate_fire {
                     perf_issued += 1;
                 }
 
@@ -666,7 +667,7 @@ module core (
                     perf_raw_stall += 1;
                 } else if exs_muldiv_stall {
                     perf_muldiv_stall += 1;
-                } else if !rob_aready {
+                } else if !rob_allocate_ready {
                     perf_rob_full_stall += 1;
                 } else if !exs_route_ready {
                     perf_memq_full_stall += 1;
@@ -721,7 +722,7 @@ module core (
                 }
                 $display("WB ----");
                 if wbs_valid {
-                    $display("  %h : %h", rob_rdata.addr, rob_rdata.bits);
+                    $display("  %h : %h", rob_commit_data.addr, rob_commit_data.bits);
                     if wbs_ctrl.rwb_en {
                         $display("  reg[%d] <= %h", wbs_rd_addr, wbs_wb_data);
                     }
@@ -784,29 +785,29 @@ module core (
         rst     ,
         flush: 0,
 
-        avalid: rob_avalid,
-        aready: rob_aready,
-        adone : rob_adone ,
-        adata : rob_adata ,
-        atag  : rob_atag  ,
+        allocate_valid: rob_allocate_valid,
+        allocate_ready: rob_allocate_ready,
+        allocate_done : rob_allocate_done ,
+        allocate_data : rob_allocate_data ,
+        allocate_tag  : rob_allocate_tag  ,
 
-        cvalid: rob_cvalid,
-        ctag  : rob_ctag  ,
-        cdata : rob_cdata ,
+        complete_valid: rob_complete_valid,
+        complete_tag  : rob_complete_tag  ,
+        complete_data : rob_complete_data ,
 
-        rvalid: rob_rvalid,
-        rready: rob_rready,
-        rdata : rob_rdata ,
+        commit_valid: rob_commit_valid,
+        commit_ready: rob_commit_ready,
+        commit_data : rob_commit_data ,
 
-        hvalid: rob_hvalid,
-        htag  : rob_htag  ,
+        head_valid: rob_head_valid,
+        head_tag  : rob_head_tag  ,
 
-        q1tag : rob_q1tag ,
-        q1done: rob_q1done,
-        q1data: rob_q1data,
+        query1_tag : rob_query1_tag ,
+        query1_done: rob_query1_done,
+        query1_data: rob_query1_data,
 
-        q2tag : rob_q2tag ,
-        q2done: rob_q2done,
-        q2data: rob_q2data,
+        query2_tag : rob_query2_tag ,
+        query2_done: rob_query2_done,
+        query2_data: rob_query2_data,
     );
 }
