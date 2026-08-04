@@ -7,21 +7,22 @@ module inst_decoder (
     imm  : output UIntX   ,
 ) {
     // 即値の生成
-    let   imm_i_g: logic<12> = bits[31:20];
-    let   imm_s_g: logic<12> = {bits[31:25], bits[11:7]};
-    let   imm_b_g: logic<12> = {bits[31], bits[7], bits[30:25], bits[11:8]};
-    let   imm_u_g: logic<20> = bits[31:12];
-    let   imm_j_g: logic<20> = {bits[31], bits[19:12], bits[20], bits[30:21]};
-    let   imm_i  : UIntX     = {bits[31] repeat XLEN - $bits(imm_i_g), imm_i_g};
-    let   imm_s  : UIntX     = {bits[31] repeat XLEN - $bits(imm_s_g), imm_s_g};
-    let   imm_b  : UIntX     = {bits[31] repeat XLEN - $bits(imm_b_g) - 1, imm_b_g, 1'b0};
-    let   imm_u  : UIntX     = {bits[31] repeat XLEN - $bits(imm_u_g) - 12, imm_u_g, 12'b0};
-    let   imm_j  : UIntX     = {bits[31] repeat XLEN - $bits(imm_j_g) - 1, imm_j_g, 1'b0};
-    let   op     : logic<7>  = bits[6:0];
-    let   f7     : logic<7>  = bits[31:25];
-    let   f3     : logic<3>  = bits[14:12];
-    const T      : logic     = 1'b1;
-    const F      : logic     = 1'b0;
+    let   imm_i_g  : logic<12> = bits[31:20];
+    let   imm_s_g  : logic<12> = {bits[31:25], bits[11:7]};
+    let   imm_b_g  : logic<12> = {bits[31], bits[7], bits[30:25], bits[11:8]};
+    let   imm_u_g  : logic<20> = bits[31:12];
+    let   imm_j_g  : logic<20> = {bits[31], bits[19:12], bits[20], bits[30:21]};
+    let   imm_i    : UIntX     = {bits[31] repeat XLEN - $bits(imm_i_g), imm_i_g};
+    let   imm_s    : UIntX     = {bits[31] repeat XLEN - $bits(imm_s_g), imm_s_g};
+    let   imm_b    : UIntX     = {bits[31] repeat XLEN - $bits(imm_b_g) - 1, imm_b_g, 1'b0};
+    let   imm_u    : UIntX     = {bits[31] repeat XLEN - $bits(imm_u_g) - 12, imm_u_g, 12'b0};
+    let   imm_j    : UIntX     = {bits[31] repeat XLEN - $bits(imm_j_g) - 1, imm_j_g, 1'b0};
+    let   op       : logic<7>  = bits[6:0];
+    let   f7       : logic<7>  = bits[31:25];
+    let   f3       : logic<3>  = bits[14:12];
+    const T        : logic     = 1'b1;
+    const F        : logic     = 1'b0;
+    let   is_muldiv: logic     = f7 == 7'b0000001;
     always_comb {
         valid = case op {
             OP_LUI, OP_AUIPC, OP_JAL, OP_JALR: T,
@@ -58,6 +59,7 @@ module inst_decoder (
                  bits == 32'h00100073
                 || // EBREAK
                  bits == 32'h30200073, //MRET
+            OP_AMO     : f3 == 3'b010 || f3 == 3'b011, // AMO
             OP_MISC_MEM: T, // FENCE
             default    : F,
         };
@@ -71,21 +73,23 @@ module inst_decoder (
             OP_STORE               : imm_s,
             default                : 'x,
         };
+
         ctrl = {
             case op {
-                OP_LUI      : {InstType::U, T, T, F, F, F, F, F, F},
-                OP_AUIPC    : {InstType::U, T, F, F, F, F, F, F, F},
-                OP_JAL      : {InstType::J, T, F, F, F, F, T, F, F},
-                OP_JALR     : {InstType::I, T, F, F, F, F, T, F, F},
-                OP_BRANCH   : {InstType::B, F, F, F, F, F, F, F, F},
-                OP_LOAD     : {InstType::I, T, F, F, F, F, F, T, F},
-                OP_STORE    : {InstType::S, F, F, F, F, F, F, F, F},
-                OP_OP       : {InstType::R, T, F, T, f7 == 7'b0000001, F, F, F, F},
-                OP_OP_IMM   : {InstType::I, T, F, T, F, F, F, F, F},
-                OP_OP_32    : {InstType::R, T, F, T, f7 == 7'b0000001, T, F, F, F},
-                OP_OP_IMM_32: {InstType::I, T, F, T, F, T, F, F, F},
-                OP_SYSTEM   : {InstType::I, T, F, F, F, F, F, F, T},
-                default     : {InstType::X, F, F, F, F, F, F, F, F},
+                OP_LUI      : {InstType::U, T, T, F, F, F, F, F, F, F},
+                OP_AUIPC    : {InstType::U, T, F, F, F, F, F, F, F, F},
+                OP_JAL      : {InstType::J, T, F, F, F, F, T, F, F, F},
+                OP_JALR     : {InstType::I, T, F, F, F, F, T, F, F, F},
+                OP_BRANCH   : {InstType::B, F, F, F, F, F, F, F, F, F},
+                OP_LOAD     : {InstType::I, T, F, F, F, F, F, T, F, F},
+                OP_STORE    : {InstType::S, F, F, F, F, F, F, F, F, F},
+                OP_OP       : {InstType::R, T, F, T, is_muldiv, F, F, F, F, F},
+                OP_OP_IMM   : {InstType::I, T, F, T, F, F, F, F, F, F},
+                OP_OP_32    : {InstType::R, T, F, T, is_muldiv, T, F, F, F, F},
+                OP_OP_IMM_32: {InstType::I, T, F, T, F, T, F, F, F, F},
+                OP_SYSTEM   : {InstType::I, T, F, F, F, F, F, F, T, F},
+                OP_AMO      : {InstType::R, T, F, F, F, F, F, F, F, T},
+                default     : {InstType::X, F, F, F, F, F, F, F, F, F},
             }, f3, f7
         };
     }

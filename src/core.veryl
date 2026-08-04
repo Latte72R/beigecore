@@ -5,7 +5,7 @@ module core (
     clk     : input   clock                          ,
     rst     : input   reset                          ,
     i_membus: modport membus_if::<ILEN, XLEN>::master,
-    d_membus: modport Membus::master                 ,
+    d_membus: modport core_data_if::master           ,
     led     : output  UIntX                          ,
 ) {
     // ifのFIFOのデータ型
@@ -435,12 +435,13 @@ module core (
 
         // exception
         let instruction_address_misaligned: logic = memq_wdata.br_taken && memq_wdata.jump_addr[1:0] != 2'b00;
+        let memaddr                       : Addr  = if exs_ctrl.is_amo ? exs_rs1_data : exs_alu_result;
         let loadstore_address_misaligned  : logic = inst_is_memop(exs_ctrl)
             && case exs_ctrl.funct3[1:0] {
                 2'b00  : 1'b0, // B
-                2'b01  : exs_alu_result[0] != 1'b0, // H
-                2'b10  : exs_alu_result[1:0] != 2'b0, // W
-                2'b11  : exs_alu_result[2:0] != 3'b0, // D
+                2'b01  : memaddr[0] != 1'b0, // H
+                2'b10  : memaddr[1:0] != 2'b0, // W
+                2'b11  : memaddr[2:0] != 3'b0, // D
                 default: 1'b0,
             };
         memq_wdata.expt = exq_rdata.expt;
@@ -456,7 +457,7 @@ module core (
                 :
                     CsrCause::STORE_AMO_ADDRESS_MISALIGNED
                 ;
-                memq_wdata.expt.value = exs_alu_result;
+                memq_wdata.expt.value = memaddr;
             }
         }
     }
@@ -477,7 +478,7 @@ module core (
     let mems_is_serializing: logic = memq_rdata.br_taken || mems_ctrl.is_csr || mems_expt.valid;
 
     // Storeまたは直列化命令ならROB先頭の場合だけ実行してよい
-    let mems_requires_head: logic = mems_is_store || mems_ctrl.is_csr || mems_expt.valid;
+    let mems_requires_head: logic = mems_is_store || mems_ctrl.is_amo || mems_ctrl.is_csr || mems_expt.valid;
     let mems_can_execute  : logic = !mems_requires_head || mems_at_rob_head;
 
     let serial_complete: logic = rob_complete_valid && mems_is_serializing;
@@ -496,13 +497,14 @@ module core (
 
     var memu_rdata: UIntX;
     var memu_stall: logic;
+    let memu_addr : Addr  = if mems_ctrl.is_amo ? memq_rdata.rs1_data : memq_rdata.alu_result;
 
     inst memu: memunit (
         clk                                                       ,
         rst                                                       ,
         valid : mems_valid && mems_can_execute && !mems_expt.valid,
         ctrl  : mems_ctrl                                         ,
-        addr  : memq_rdata.alu_result                             ,
+        addr  : memu_addr                                         ,
         rs2   : memq_rdata.rs2_data                               ,
         rdata : memu_rdata                                        ,
         stall : memu_stall                                        ,
@@ -543,11 +545,11 @@ module core (
         rob_complete_data.rd_addr = memq_rdata.bits[11:7];
 
         rob_complete_data.result = switch {
-            mems_ctrl.is_lui : memq_rdata.imm,
-            mems_ctrl.is_jump: memq_rdata.addr + 4,
-            mems_ctrl.is_load: memu_rdata,
-            mems_ctrl.is_csr : csru_rdata,
-            default          : memq_rdata.alu_result
+            mems_ctrl.is_lui                     : memq_rdata.imm,
+            mems_ctrl.is_jump                    : memq_rdata.addr + 4,
+            mems_ctrl.is_load || mems_ctrl.is_amo: memu_rdata,
+            mems_ctrl.is_csr                     : csru_rdata,
+            default                              : memq_rdata.alu_result
         };
 
         rob_complete_data.expt       = memq_rdata.expt;

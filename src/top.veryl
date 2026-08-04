@@ -29,8 +29,9 @@ module top #(
     inst rom_membus     : membus_if::<ROM_DATA_WIDTH, ROM_ADDR_WIDTH>;
     inst dbg_membus     : Membus;
 
-    inst i_membus: membus_if::<ILEN, XLEN>; // 命令フェッチ用
-    inst d_membus: Membus; // ロードストア命令用
+    inst i_membus     : membus_if::<ILEN, XLEN>; // 命令フェッチ用
+    inst d_membus_core: core_data_if; // ロードストア命令用
+    inst d_membus     : Membus;
 
     var memarb_last_i    : logic;
     var memarb_last_iaddr: Addr ;
@@ -123,7 +124,20 @@ module top #(
         dbg_membus                 ,
     );
 
-    inst c: core ( clk, rst, i_membus, d_membus, led );
+    inst amou: amounit (
+        clk                  ,
+        rst                  ,
+        slave : d_membus_core,
+        master: d_membus     ,
+    );
+
+    inst c: core (
+        clk                    ,
+        rst                    ,
+        i_membus               ,
+        d_membus: d_membus_core,
+        led                    ,
+    );
 
     // デバッグ用のIO
     always_ff {
