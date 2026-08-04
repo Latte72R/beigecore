@@ -51,17 +51,13 @@ jobs:
               run: make sim
 
             - name: make test
-              continue-on-error: true
               run: make test
 
             - name: make bench
-              continue-on-error: true
               run: make bench COREMARK_ITERATIONS=1 COREMARK_CYCLES=20000000
 
             - name: make synth
-              continue-on-error: true
               run: make synth
 
             - name: make fmax
-              continue-on-error: true
               run: make fmax

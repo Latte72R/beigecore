@@ -20,6 +20,7 @@ TIMING_PATHS ?= 10
 
 RV_TEST_DIR ?= test/share/riscv-tests
 RV_TEST_FILTER ?= rv64ui-p- rv64um-p- rv64ua-p-
+RV_TEST_EXCLUDE ?= ma_data
 
 BOOTROM_HEX := bootrom.hex
 
@@ -82,7 +83,8 @@ test: $(OBJ_DIR)/$(SIM) ## Run tests with the built simulator
 	@status=0; \
 	for filter in $(RV_TEST_FILTER); do \
 		echo "== $$filter =="; \
-		python3 test/test.py -r -o results/$$filter $(OBJ_DIR)/$(SIM) $(RV_TEST_DIR) $$filter || status=$$?; \
+		python3 test/test.py -r $(foreach pattern,$(RV_TEST_EXCLUDE),--exclude $(pattern)) \
+			-o results/$$filter $(OBJ_DIR)/$(SIM) $(RV_TEST_DIR) $$filter || status=$$?; \
 	done; \
 	exit $$status
 

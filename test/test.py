@@ -8,6 +8,13 @@ parser.add_argument("sim_path", help="path to simlator")
 parser.add_argument("dir", help="directory includes test")
 parser.add_argument("files", nargs="*", help="test hex file names")
 parser.add_argument("-r", "--recursive", action="store_true", help="search file recursively")
+parser.add_argument(
+    "-x",
+    "--exclude",
+    action="append",
+    default=[],
+    help="exclude files whose names contain this pattern (repeatable)",
+)
 parser.add_argument("-e", "--extension", default=".bin.hex", help="hex file extension")
 parser.add_argument("-d", "--debug_label", default=".tohost", help="debug device label")
 parser.add_argument("-o", "--output_dir", default="results", help="result output directory")
@@ -67,15 +74,14 @@ def dir_walk(dir):
                 for e in dir_walk(entry.path):
                     yield e
             continue
-        if entry.is_file():
-            if not is_elf(entry.path):
-                continue
-            if len(args.files) == 0:
-                yield entry.path
-            for f in args.files:
-                if entry.name.find(f) != -1:
-                    yield entry.path
-                    break
+        if not entry.is_file() or not is_elf(entry.path):
+            continue
+        if len(args.files) != 0 and not any(f in entry.name for f in args.files):
+            continue
+        if any(pattern in entry.name for pattern in args.exclude):
+            print("SKIP :", entry.path, "(excluded)")
+            continue
+        yield entry.path
 
 
 if __name__ == "__main__":
