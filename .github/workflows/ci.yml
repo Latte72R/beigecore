@@ -27,6 +27,7 @@ jobs:
                     curl \
                     unzip \
                     python3 \
+                    python3-pyelftools \
                     gcc-riscv64-unknown-elf \
                     binutils-riscv64-unknown-elf \
                     verilator \
