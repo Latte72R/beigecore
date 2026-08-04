@@ -12,6 +12,10 @@ module amounit (
         WaitValid,
         SCSuccess,
         SCFail,
+        AMOLoadReady,
+        AMOLoadValid,
+        AMOStoreReady,
+        AMOStoreValid,
     }
 
     // slaveからの要求を保存するための構造体
@@ -44,6 +48,9 @@ module amounit (
     var is_addr_reserved: logic;
     var reserved_addr   : Addr ;
 
+    // amo
+    var zaamo_fetched_data: UIntX;
+
     // masterに要求を割り当てる
     function assign_master (
         addr : input Addr                   ,
@@ -56,6 +63,47 @@ module amounit (
         master.wen   = wen;
         master.wdata = wdata;
         master.wmask = wmask;
+    }
+
+    // AMO ALU
+    function calc_amo::<W: u32> (
+        amoop: input AMOOp   ,
+        wdata: input logic<W>,
+        rdata: input logic<W>,
+    ) -> logic<W> {
+        let lts: logic = $signed(wdata) <: $signed(rdata);
+        let ltu: logic = wdata <: rdata;
+
+        return case amoop {
+            AMOOp::SWAP: wdata,
+            AMOOp::ADD : rdata + wdata,
+            AMOOp::XOR : rdata ^ wdata,
+            AMOOp::AND : rdata & wdata,
+            AMOOp::OR  : rdata | wdata,
+            AMOOp::MIN : if lts ? wdata : rdata,
+            AMOOp::MAX : if !lts ? wdata : rdata,
+            AMOOp::MINU: if ltu ? wdata : rdata,
+            AMOOp::MAXU: if !ltu ? wdata : rdata,
+            default    : 0,
+        };
+    }
+
+    // Zaamo拡張の命令のwdataを生成する
+    function gen_amo_wdata (
+        req  : input SavedRequest,
+        rdata: input UIntX       ,
+    ) -> UIntX {
+        case req.funct3 {
+            3'b010: { // word
+                let low    : logic  = req.addr[2] == 0;
+                let rdata32: UInt32 = if low ? rdata[31:0] : rdata[63:32];
+                let wdata32: UInt32 = if low ? req.wdata[31:0] : req.wdata[63:32];
+                let result : UInt32 = calc_amo::<32>(req.amoop, wdata32, rdata32);
+                return if low ? {rdata[63:32], result} : {result, rdata[31:0]};
+            }
+            3'b011 : return calc_amo::<64>(req.amoop, req.wdata, rdata); // double
+            default: return 0;
+        }
     }
 
     // slaveに結果を割り当てる
@@ -80,6 +128,11 @@ module amounit (
                 slave.rvalid = 1;
                 slave.rdata  = 1;
             }
+            State::AMOStoreValid: {
+                slave.ready  = master.rvalid;
+                slave.rvalid = master.rvalid;
+                slave.rdata  = zaamo_fetched_data;
+            }
             default: {}
         }
     }
@@ -93,7 +146,9 @@ module amounit (
                     AMOOp::SC: if is_addr_reserved && slave.addr == reserved_addr {
                         assign_master(slave.addr, 1, slave.wdata, slave.wmask);
                     }
-                    default  : {}
+                    default  : if slave.is_Zaamo() {
+                        assign_master(slave.addr, 0, 0, 0);
+                    }
                 }
             } else {
                 assign_master(slave.addr, slave.wen, slave.wdata, slave.wmask);
@@ -109,13 +164,23 @@ module amounit (
             State::WaitReady: if slave_saved.is_amo {
                 case slave_saved.amoop {
                     AMOOp::LR: assign_master(slave_saved.addr, 0, 0, 0);
+
+                    // SCが WaitReady に入っている時点で予約チェックは成功済み
                     AMOOp::SC: assign_master(slave_saved.addr, 1, slave_saved.wdata, slave_saved.wmask);
+
                     default  : {}
                 }
             } else {
                 assign_master(slave_saved.addr, slave_saved.wen, slave_saved.wdata, slave_saved.wmask);
             }
-            default: {}
+            State::AMOLoadReady                      : assign_master(slave_saved.addr, 0, 0, 0);
+            State::AMOLoadValid, State::AMOStoreReady: {
+                let rdata: UIntX = if state == State::AMOLoadValid ? master.rdata : zaamo_fetched_data;
+                let wdata: UIntX = gen_amo_wdata(slave_saved, rdata);
+                assign_master(slave_saved.addr, 1, wdata, slave_saved.wmask);
+            }
+            State::AMOStoreValid: accept_request_comb();
+            default             : {}
         }
     }
 
@@ -151,7 +216,9 @@ module amounit (
                             state = State::SCFail;
                         }
                     }
-                    default: {}
+                    default: if slave.is_Zaamo() {
+                        state = if master.ready ? State::AMOLoadValid : State::AMOLoadReady;
+                    }
                 }
             } else {
                 state = if master.ready ? State::WaitValid : State::WaitReady;
@@ -175,26 +242,40 @@ module amounit (
         slave_saved.funct3 = 0;
         is_addr_reserved   = 0;
         reserved_addr      = 0;
+        zaamo_fetched_data = 0;
     }
 
     function on_clock () {
         case state {
-            State::Init     : accept_request_ff();
-            State::WaitReady: if master.ready {
+            State::Init         : accept_request_ff();
+            State::WaitReady    : if master.ready {
                 if slave_saved.is_amo && slave_saved.amoop == AMOOp::SC {
                     state = State::SCSuccess;
                 } else {
                     state = State::WaitValid;
                 }
             }
-            State::WaitValid: if master.rvalid {
+            State::WaitValid    : if master.rvalid {
                 state = State::Init;
             }
-            State::SCSuccess: if master.rvalid {
+            State::SCSuccess    : if master.rvalid {
                 state = State::Init;
             }
-            State::SCFail   : state = State::Init;
-            default         : {}
+            State::SCFail       : state = State::Init;
+            State::AMOLoadReady : if master.ready {
+                state = State::AMOLoadValid;
+            }
+            State::AMOLoadValid : if master.rvalid {
+                zaamo_fetched_data = master.rdata;
+                state              = if slave.ready ? State::AMOStoreValid : State::AMOStoreReady;
+            }
+            State::AMOStoreReady: if master.ready {
+                state = State::AMOStoreValid;
+            }
+            State::AMOStoreValid: if master.rvalid {
+                accept_request_ff();
+            }
+            default             : {}
         }
     }
 
