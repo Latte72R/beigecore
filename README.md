@@ -2,7 +2,7 @@
 
 ![](./beigecore.png)
 
-Veryl で実装された，RV64IM 命令をサポートする RISC-V プロセッサコアです．
+Veryl で実装された，RV64IMA 命令をサポートする RISC-V プロセッサコアです．
 
 ## 必要なツール
 
