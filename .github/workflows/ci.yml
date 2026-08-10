@@ -10,9 +10,6 @@ jobs:
         name: make targets
         runs-on: ubuntu-24.04
 
-        env:
-            VERYL_VERSION: "0.20.2"
-
         steps:
             - name: Checkout
               uses: actions/checkout@v4
@@ -24,8 +21,6 @@ jobs:
                   sudo apt-get update
                   sudo apt-get install -y --no-install-recommends \
                     build-essential \
-                    curl \
-                    unzip \
                     python3 \
                     python3-pyelftools \
                     gcc-riscv64-unknown-elf \
@@ -33,16 +28,14 @@ jobs:
                     verilator \
                     yosys
 
-            - name: Install Veryl
+            - name: Install latest Veryl nightly
               run: |
-                  curl -fsSL \
-                    "https://github.com/veryl-lang/veryl/releases/download/v${VERYL_VERSION}/veryl-x86_64-linux.zip" \
-                    -o veryl.zip
-                  unzip -q veryl.zip -d veryl-dist
-                  mkdir -p "${HOME}/.local/bin"
-                  install -m 0755 "$(find veryl-dist -type f -name veryl -print -quit)" "${HOME}/.local/bin/veryl"
-                  echo "${HOME}/.local/bin" >> "${GITHUB_PATH}"
-                  export PATH="${HOME}/.local/bin:${PATH}"
+                  cargo install \
+                    --git https://github.com/veryl-lang/veryl.git \
+                    --branch master \
+                    --locked \
+                    --force \
+                    veryl
                   veryl --version
 
             - name: make build
