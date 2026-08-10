@@ -50,6 +50,14 @@ jobs:
             - name: make bench
               run: make bench COREMARK_ITERATIONS=1 COREMARK_CYCLES=20000000
 
+            - name: Upload Konata trace
+              if: always()
+              uses: actions/upload-artifact@v4
+              with:
+                  name: konata-trace
+                  path: results/konata.log
+                  if-no-files-found: warn
+
             - name: make synth
               run: make synth
 
