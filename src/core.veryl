@@ -9,63 +9,73 @@ module core (
     led     : output  UIntX                          ,
 ) {
     // ifのFIFOのデータ型
-    struct if_fifo_type {
-        addr: Addr,
-        bits: Inst,
+    struct idq_type {
+        #[ifdef(LOG_KONATA)]
+        trace_id: logic<64>,
+        addr    : Addr     ,
+        bits    : Inst     ,
     }
 
     struct exq_type {
-        addr: Addr         ,
-        bits: Inst         ,
-        ctrl: InstCtrl     ,
-        imm : UIntX        ,
-        expt: ExceptionInfo,
+        #[ifdef(LOG_KONATA)]
+        trace_id: logic        <64>,
+        addr    : Addr             ,
+        bits    : Inst             ,
+        ctrl    : InstCtrl         ,
+        imm     : UIntX            ,
+        expt    : ExceptionInfo    ,
     }
 
     struct memq_type {
-        rob_tag   : RobTag          ,
-        addr      : Addr            ,
-        bits      : Inst            ,
-        ctrl      : InstCtrl        ,
-        imm       : UIntX           ,
-        expt      : ExceptionInfo   ,
-        alu_result: UIntX           ,
-        rs1_addr  : logic        <5>,
-        rs1_data  : UIntX           ,
-        rs2_data  : UIntX           ,
-        br_taken  : logic           ,
-        jump_addr : Addr            ,
+        #[ifdef(LOG_KONATA)]
+        trace_id  : logic        <64>,
+        rob_tag   : RobTag           ,
+        addr      : Addr             ,
+        bits      : Inst             ,
+        ctrl      : InstCtrl         ,
+        imm       : UIntX            ,
+        expt      : ExceptionInfo    ,
+        alu_result: UIntX            ,
+        rs1_addr  : logic        <5> ,
+        rs1_data  : UIntX            ,
+        rs2_data  : UIntX            ,
+        br_taken  : logic            ,
+        jump_addr : Addr             ,
     }
 
     struct wbq_type {
-        addr      : Addr    ,
-        bits      : Inst    ,
-        ctrl      : InstCtrl,
-        imm       : UIntX   ,
-        alu_result: UIntX   ,
-        mem_rdata : UIntX   ,
-        csr_rdata : UIntX   ,
-        raise_trap: logic   ,
+        #[ifdef(LOG_KONATA)]
+        trace_id  : logic   <64>,
+        addr      : Addr        ,
+        bits      : Inst        ,
+        ctrl      : InstCtrl    ,
+        imm       : UIntX       ,
+        alu_result: UIntX       ,
+        mem_rdata : UIntX       ,
+        csr_rdata : UIntX       ,
+        raise_trap: logic       ,
     }
 
     struct rob_entry_type {
-        addr      : Addr            ,
-        bits      : Inst            ,
-        ctrl      : InstCtrl        ,
-        rd_addr   : logic        <5>,
-        result    : UIntX           ,
-        expt      : ExceptionInfo   ,
-        raise_trap: logic           ,
+        #[ifdef(LOG_KONATA)]
+        trace_id  : logic        <64>,
+        addr      : Addr             ,
+        bits      : Inst             ,
+        ctrl      : InstCtrl         ,
+        rd_addr   : logic        <5> ,
+        result    : UIntX            ,
+        expt      : ExceptionInfo    ,
+        raise_trap: logic            ,
     }
 
     // FIFOの制御用レジスタ
-    var if_fifo_wready    : logic       ;
-    var if_fifo_wready_two: logic       ;
-    var if_fifo_wvalid    : logic       ;
-    var if_fifo_wdata     : if_fifo_type;
-    var if_fifo_rready    : logic       ;
-    var if_fifo_rvalid    : logic       ;
-    var if_fifo_rdata     : if_fifo_type;
+    var idq_wready    : logic   ;
+    var idq_wready_two: logic   ;
+    var idq_wvalid    : logic   ;
+    var idq_wdata     : idq_type;
+    var idq_rready    : logic   ;
+    var idq_rvalid    : logic   ;
+    var idq_rdata     : idq_type;
 
     // ID -> EXのFIFO
     var exq_wready: logic   ;
@@ -110,77 +120,97 @@ module core (
 
     ///////////////////////////////// IF Stage /////////////////////////////////
 
-    var if_pc          : Addr ;
-    var if_is_requested: logic; // フェッチ中かどうか
-    var if_pc_requested: Addr ; // 要求したアドレス
-    let if_pc_next     : Addr  = if_pc + 4;
+    var ifs_pc          : Addr ;
+    var ifs_is_requested: logic; // フェッチ中かどうか
+    var ifs_pc_requested: Addr ; // 要求したアドレス
+    let ifs_pc_next     : Addr  = ifs_pc + 4;
+
+    #[ifdef(LOG_KONATA)]
+    var ifs_trace_id_next: u64;
+    #[ifdef(LOG_KONATA)]
+    var ifs_trace_id_requested: logic<64>;
 
     var control_hazard        : logic;
     var control_hazard_pc_next: Addr ;
 
-    // フェッチした命令を格納するFIFO
-    inst if_fifo: fifo #(
-        DATA_TYPE: if_fifo_type,
-        WIDTH    : 3           ,
-    ) (
-        clk                           ,
-        rst                           ,
-        flush     : control_hazard    ,
-        wready    : if_fifo_wready    ,
-        wready_two: if_fifo_wready_two,
-        wvalid    : if_fifo_wvalid    ,
-        wdata     : if_fifo_wdata     ,
-        rready    : if_fifo_rready    ,
-        rvalid    : if_fifo_rvalid    ,
-        rdata     : if_fifo_rdata     ,
-    );
-
     // 命令フェッチ処理
     always_comb {
         // FIFOに2個以上空きがあるとき、命令をフェッチする
-        i_membus.valid = if_fifo_wready_two;
-        i_membus.addr  = if_pc;
+        i_membus.valid = idq_wready_two;
+        i_membus.addr  = ifs_pc;
         i_membus.wen   = 0;
         i_membus.wdata = 'x; // wdataは使用しない
         i_membus.wmask = 'x; // wmaskは使用しない
     }
+    #[ifdef(LOG_KONATA)]
+    let ifs_request_fire: logic = !control_hazard && i_membus.ready && i_membus.valid
+        && (!ifs_is_requested || i_membus.rvalid);
+
+    #[ifdef(LOG_KONATA)]
+    let ifs_response_fire: logic = !control_hazard && ifs_is_requested && i_membus.rvalid;
+
+    #[ifdef(LOG_KONATA)]
+    let id_ex_fire: logic = !control_hazard && idq_rvalid && idq_rready;
 
     always_ff {
         if_reset {
-            if_pc           = INITIAL_PC;
-            if_is_requested = 0;
-            if_pc_requested = 0;
-            if_fifo_wvalid  = 0;
-            if_fifo_wdata   = 0;
+            ifs_pc           = INITIAL_PC;
+            ifs_is_requested = 0;
+            ifs_pc_requested = 0;
+            idq_wvalid       = 0;
+            idq_wdata        = 0;
+
+            #[ifdef(LOG_KONATA)]
+            block {
+                ifs_trace_id_next      = 0;
+                ifs_trace_id_requested = 0;
+            }
         } else {
             if control_hazard {
-                if_pc           = control_hazard_pc_next;
-                if_is_requested = 0;
-                if_fifo_wvalid  = 0;
+                ifs_pc           = control_hazard_pc_next;
+                ifs_is_requested = 0;
+                idq_wvalid       = 0;
             } else {
-                if if_is_requested {
+                if ifs_is_requested {
                     if i_membus.rvalid {
-                        if_is_requested = i_membus.ready && i_membus.valid;
+                        ifs_is_requested = i_membus.ready && i_membus.valid;
+
+                        // 応答と同時に次の要求を受理
                         if i_membus.ready && i_membus.valid {
-                            if_pc           = if_pc_next;
-                            if_pc_requested = if_pc;
+                            ifs_pc           = ifs_pc_next;
+                            ifs_pc_requested = ifs_pc;
+
+                            #[ifdef(LOG_KONATA)]
+                            block {
+                                ifs_trace_id_requested =  ifs_trace_id_next;
+                                ifs_trace_id_next      += 1;
+                            }
                         }
                     }
                 } else {
+                    // 最初の要求または応答待ち要求がない状態
                     if i_membus.ready && i_membus.valid {
-                        if_is_requested = 1;
-                        if_pc           = if_pc_next;
-                        if_pc_requested = if_pc;
+                        ifs_is_requested = 1;
+                        ifs_pc           = ifs_pc_next;
+                        ifs_pc_requested = ifs_pc;
+
+                        #[ifdef(LOG_KONATA)]
+                        block {
+                            ifs_trace_id_requested =  ifs_trace_id_next;
+                            ifs_trace_id_next      += 1;
+                        }
                     }
                 }
                 // IFのFIFOの制御
-                if if_is_requested && i_membus.rvalid {
-                    if_fifo_wvalid     = 1;
-                    if_fifo_wdata.addr = if_pc_requested;
-                    if_fifo_wdata.bits = i_membus.rdata;
+                if ifs_is_requested && i_membus.rvalid {
+                    idq_wvalid     = 1;
+                    idq_wdata.addr = ifs_pc_requested;
+                    idq_wdata.bits = i_membus.rdata;
+                    #[ifdef(LOG_KONATA)]
+                    idq_wdata.trace_id = ifs_trace_id_requested;
                 } else {
-                    if if_fifo_wvalid && if_fifo_wready {
-                        if_fifo_wvalid = 0;
+                    if idq_wvalid && idq_wready {
+                        idq_wvalid = 0;
                     }
                 }
             }
@@ -189,9 +219,13 @@ module core (
 
     ///////////////////////////////// ID Stage /////////////////////////////////
 
-    let ids_valid     : logic    = if_fifo_rvalid;
-    let ids_pc        : Addr     = if_fifo_rdata.addr;
-    let ids_inst_bits : Inst     = if_fifo_rdata.bits;
+    let ids_valid    : logic = idq_rvalid;
+    let ids_pc       : Addr  = idq_rdata.addr;
+    let ids_inst_bits: Inst  = idq_rdata.bits;
+
+    #[ifdef(LOG_KONATA)]
+    let ids_trace_id: logic<64> = idq_rdata.trace_id;
+
     var ids_inst_valid: logic   ;
     var ids_ctrl      : InstCtrl;
     var ids_imm       : UIntX   ;
@@ -205,12 +239,17 @@ module core (
 
     always_comb {
         // ID -> EX
-        if_fifo_rready = exq_wready;
-        exq_wvalid     = if_fifo_rvalid;
-        exq_wdata.addr = if_fifo_rdata.addr;
-        exq_wdata.bits = if_fifo_rdata.bits;
+        idq_rready = exq_wready;
+        exq_wvalid = idq_rvalid;
+
+        exq_wdata.addr = idq_rdata.addr;
+        exq_wdata.bits = idq_rdata.bits;
         exq_wdata.ctrl = ids_ctrl;
         exq_wdata.imm  = ids_imm;
+
+        #[ifdef(LOG_KONATA)]
+        exq_wdata.trace_id = idq_rdata.trace_id;
+
         // exception
         exq_wdata.expt = 0;
         if !ids_inst_valid {
@@ -238,6 +277,9 @@ module core (
     let exs_inst_bits: Inst     = exq_rdata.bits;
     let exs_ctrl     : InstCtrl = exq_rdata.ctrl;
     let exs_imm      : UIntX    = exq_rdata.imm;
+
+    #[ifdef(LOG_KONATA)]
+    let exs_trace_id: logic<64> = exq_rdata.trace_id;
 
     // レジスタ
     var regfile: UIntX<32>;
@@ -392,6 +434,10 @@ module core (
             exs_ctrl.is_muldiv: exs_muldiv_result,
             default           : exs_alu_result,
         };
+
+        #[ifdef(LOG_KONATA)]
+        rob_allocate_data.trace_id = exq_rdata.trace_id;
+
         rob_allocate_data.expt       = memq_wdata.expt;
         rob_allocate_data.raise_trap = 0;
 
@@ -421,10 +467,14 @@ module core (
         exq_rready         = rob_allocate_ready && exs_route_ready && !exs_stall && !serial_pending && !control_hazard;
         memq_wvalid        = rob_allocate_fire && exs_needs_mem;
 
-        memq_wdata.addr       = exq_rdata.addr;
-        memq_wdata.bits       = exq_rdata.bits;
-        memq_wdata.ctrl       = exq_rdata.ctrl;
-        memq_wdata.imm        = exq_rdata.imm;
+        memq_wdata.addr = exq_rdata.addr;
+        memq_wdata.bits = exq_rdata.bits;
+        memq_wdata.ctrl = exq_rdata.ctrl;
+        memq_wdata.imm  = exq_rdata.imm;
+
+        #[ifdef(LOG_KONATA)]
+        memq_wdata.trace_id = exq_rdata.trace_id;
+
         memq_wdata.rs1_addr   = exs_rs1_addr;
         memq_wdata.rs1_data   = exs_rs1_data;
         memq_wdata.rs2_data   = exs_rs2_data;
@@ -470,6 +520,9 @@ module core (
     let mems_ctrl     : InstCtrl         = memq_rdata.ctrl;
     let mems_expt     : ExceptionInfo    = memq_rdata.expt;
     let mems_rd_addr  : logic        <5> = mems_inst_bits[11:7];
+
+    #[ifdef(LOG_KONATA)]
+    let mems_trace_id: logic<64> = memq_rdata.trace_id;
 
     let mems_is_store   : logic = inst_is_store(mems_ctrl);
     let mems_at_rob_head: logic = rob_head_valid && rob_head_tag == memq_rdata.rob_tag;
@@ -554,6 +607,10 @@ module core (
 
         rob_complete_data.expt       = memq_rdata.expt;
         rob_complete_data.raise_trap = csru_raise_trap;
+
+        #[ifdef(LOG_KONATA)]
+        rob_complete_data.trace_id = memq_rdata.trace_id;
+
     }
 
     always_comb {
@@ -568,6 +625,9 @@ module core (
     let wbs_ctrl   : InstCtrl    = rob_commit_data.ctrl;
     let wbs_rd_addr: logic   <5> = rob_commit_data.rd_addr;
     let wbs_wb_data: UIntX       = rob_commit_data.result;
+
+    #[ifdef(LOG_KONATA)]
+    let wbs_trace_id: logic<64> = rob_commit_data.trace_id;
 
     always_ff {
         // ROB先頭が完成済み & コミットが成立 & レジスタ書込み命令 & x0ではない & trapではない
@@ -688,12 +748,12 @@ module core (
                 $display("# %d", clock_count);
 
                 $display("IF ------");
-                $display("     pc : %h", if_pc);
-                $display(" is req : %b", if_is_requested);
-                $display(" pc req : %h", if_pc_requested);
+                $display("     pc : %h", ifs_pc);
+                $display(" is req : %b", ifs_is_requested);
+                $display(" pc req : %h", ifs_pc_requested);
                 $display("ID ------");
                 if ids_valid {
-                    $display("  %h : %h", ids_pc, if_fifo_rdata.bits);
+                    $display("  %h : %h", ids_pc, idq_rdata.bits);
                     $display("  itype : %b", ids_ctrl.itype);
                     $display("  imm   : %h", ids_imm);
                 }
@@ -747,7 +807,85 @@ module core (
         }
     }
 
+    ///////////////////////////////// KONATA /////////////////////////////////
+
+    #[ifdef(LOG_KONATA)]
+    {
+        var konata_retire_id;
+        always_ff {
+            if_reset {
+                konata_retire_id = 0;
+
+                $display("Kanata\t0004");
+                $display("C=\t0");
+            } else {
+                $display("C\t1");
+
+                // IF stage
+                if ifs_request_fire {
+                    $display("I\t%0d\t%0d\t0", ifs_trace_id_next, ifs_trace_id_next);
+                    $display("S\t%0d\t0\tF", ifs_trace_id_next);
+                }
+
+                // ID stage
+                if ifs_response_fire {
+                    $display("L\t%0d\t0\t%h: %h", ifs_trace_id_requested, ifs_pc_requested, i_membus.rdata);
+                    $display("S\t%0d\t0\tD", ifs_trace_id_requested);
+                }
+
+                // EX stage
+                if id_ex_fire {
+                    $display("L\t%0d\t1\titype: %b", ids_trace_id, ids_ctrl.itype);
+                    $display("S\t%0d\t0\tX", ids_trace_id);
+                }
+
+                // MEM stage
+                if rob_allocate_fire {
+                    if exs_needs_mem {
+                        $display("S\t%0d\t0\tM", exs_trace_id);
+                    } else {
+                        $display("S\t%0d\t0\tB", exs_trace_id);
+                    }
+                }
+                if rob_complete_valid {
+                    $display("S\t%0d\t0\tB", mems_trace_id);
+                }
+
+                // WB stage
+                if rob_commit_fire {
+                    $display("S\t%0d\t0\tW", wbs_trace_id);
+                    $display("R\t%0d\t%0d\t0", wbs_trace_id, konata_retire_id);
+
+                    konata_retire_id += 1;
+                }
+
+                // 分岐・ジャンプ・例外による命令の破棄
+                if control_hazard {
+                    for trace_id in ((mems_trace_id + 1) as u32)..(ifs_trace_id_next as u32) {
+                        $display("R\t%0d\t%0d\t1", trace_id, konata_retire_id);
+                    }
+                }
+            }
+        }
+    }
+
     ///////////////////////////////// FIFO /////////////////////////////////
+
+    inst idq: fifo #(
+        DATA_TYPE: idq_type,
+        WIDTH    : 3       ,
+    ) (
+        clk                       ,
+        rst                       ,
+        flush     : control_hazard,
+        wready    : idq_wready    ,
+        wready_two: idq_wready_two,
+        wvalid    : idq_wvalid    ,
+        wdata     : idq_wdata     ,
+        rready    : idq_rready    ,
+        rvalid    : idq_rvalid    ,
+        rdata     : idq_rdata     ,
+    );
 
     inst id_ex_fifo: fifo #(
         DATA_TYPE: exq_type,

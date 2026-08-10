@@ -163,10 +163,7 @@ module top #(
                         block {
                             test_success = dbg_membus.wdata == 1;
                         }
-                        if dbg_membus.wdata == 1 {
-                            $display("test success!");
-                        } else {
-                            $display("test failed!");
+                        if dbg_membus.wdata != 1 {
                             $error("wdata : %h", dbg_membus.wdata);
                         }
                         $finish();

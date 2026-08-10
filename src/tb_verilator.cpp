@@ -1,3 +1,7 @@
+#if defined(PRINT_DEBUG) && defined(LOG_KONATA)
+#error "PRINT_DEBUG and LOG_KONATA cannot be enabled together"
+#endif
+
 #include "Vcore_top.h"
 #include <cstdio>
 #include <fcntl.h>
@@ -9,6 +13,10 @@
 #include <string>
 #include <termios.h>
 #include <verilated.h>
+
+#if defined(LOG_KONATA) && defined(VL_USER_FINISH)
+void vl_finish(const char *, int, const char *) { Verilated::gotFinish(true); }
+#endif
 
 namespace fs = std::filesystem;
 
@@ -165,9 +173,11 @@ int main(int argc, char **argv) {
     executed_cycles = i / 2;
   }
   dut->final();
-  std::cout << "cycles: " << executed_cycles << std::endl;
+  std::cerr << "cycles: " << executed_cycles << std::endl;
 
 #ifdef TEST_MODE
-  return dut->test_success != 1;
+  const bool test_success = dut->test_success == 1;
+  std::cerr << (test_success ? "test success!" : "test failed!") << std::endl;
+  return !test_success;
 #endif
 }

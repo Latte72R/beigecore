@@ -5,8 +5,7 @@
 *.f
 
 # Verilator
-obj_dir/
-obj_dir_debug/
+obj_dir*
 
 # Test
 results/
