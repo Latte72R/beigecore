@@ -4,27 +4,69 @@ interface core_inst_if {
     var trace_id: logic<64>;
     #[ifdef(LOG_KONATA)]
     var trace_id_next: logic<64>;
-    var rvalid       : logic    ;
-    var rready       : logic    ;
-    var raddr        : Addr     ;
-    var rdata        : Inst     ;
-    var is_redirect  : logic    ;
-    var next_pc      : Addr     ;
+    #[ifdef(LOG_KONATA)]
+    var trace_fetch_valid: logic;
+    #[ifdef(LOG_KONATA)]
+    var trace_fetch_id: logic<64>;
+    #[ifdef(LOG_KONATA)]
+    var trace_fetch_addr: Addr;
+    #[ifdef(LOG_KONATA)]
+    var trace_fetch_bits: Inst ;
+    var rvalid          : logic;
+    var rready          : logic;
+    var raddr           : Addr ;
+    var rdata           : Inst ;
+    var is_rvc          : logic;
+    var is_redirect     : logic;
+    var next_pc         : Addr ;
 
     modport master {
         #[ifdef(LOG_KONATA)]
         trace_id: input,
         #[ifdef(LOG_KONATA)]
-        trace_id_next: input ,
-        rvalid       : input ,
-        rready       : output,
-        raddr        : input ,
-        rdata        : input ,
-        is_redirect  : output, // control hazard
-        next_pc      : output, // actual next pc
+        trace_id_next: input,
+        #[ifdef(LOG_KONATA)]
+        trace_fetch_valid: input,
+        #[ifdef(LOG_KONATA)]
+        trace_fetch_id: input,
+        #[ifdef(LOG_KONATA)]
+        trace_fetch_addr: input,
+        #[ifdef(LOG_KONATA)]
+        trace_fetch_bits: input ,
+        rvalid          : input ,
+        rready          : output,
+        raddr           : input ,
+        rdata           : input ,
+        is_rvc          : input ,
+        is_redirect     : output, // control hazard
+        next_pc         : output, // actual next pc
     }
 
+    // Veryl のバグのため
+    // modport slave {
+    //     ..converse(master)
+    // }
+
     modport slave {
-        ..converse(master)
+        #[ifdef(LOG_KONATA)]
+        trace_id: output,
+        #[ifdef(LOG_KONATA)]
+        trace_id_next: output,
+        #[ifdef(LOG_KONATA)]
+        trace_fetch_valid: output,
+        #[ifdef(LOG_KONATA)]
+        trace_fetch_id: output,
+        #[ifdef(LOG_KONATA)]
+        trace_fetch_addr: output,
+        #[ifdef(LOG_KONATA)]
+        trace_fetch_bits: output,
+
+        rvalid     : output,
+        rready     : input ,
+        raddr      : output,
+        rdata      : output,
+        is_rvc     : output,
+        is_redirect: input ,
+        next_pc    : input ,
     }
 }

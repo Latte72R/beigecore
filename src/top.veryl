@@ -29,7 +29,7 @@ module top #(
     inst rom_membus     : membus_if::<ROM_DATA_WIDTH, ROM_ADDR_WIDTH>;
     inst dbg_membus     : Membus;
 
-    inst i_membus     : membus_if::<ILEN, XLEN>; // 命令フェッチ用
+    inst i_membus     : Membus; // 命令フェッチ用
     inst i_membus_core: core_inst_if;
     inst d_membus_core: core_data_if; // ロードストア命令用
     inst d_membus     : Membus;

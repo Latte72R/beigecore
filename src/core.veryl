@@ -106,16 +106,6 @@ module core (
 
     ///////////////////////////////// IF Stage /////////////////////////////////
 
-    var ifs_pc          : Addr ;
-    var ifs_is_requested: logic; // フェッチ中かどうか
-    var ifs_pc_requested: Addr ; // 要求したアドレス
-    let ifs_pc_next     : Addr  = ifs_pc + 4;
-
-    #[ifdef(LOG_KONATA)]
-    var ifs_trace_id_next: u64;
-    #[ifdef(LOG_KONATA)]
-    var ifs_trace_id_requested: logic<64>;
-
     var control_hazard        : logic;
     var control_hazard_pc_next: Addr ;
 
@@ -139,81 +129,14 @@ module core (
         }
     }
 
-    #[ifdef(LOG_KONATA)]
-    let ifs_request_fire: logic = !frontend_redirect && i_membus.rready && i_membus.rvalid
-        && (!ifs_is_requested || i_membus.rvalid);
-    #[ifdef(LOG_KONATA)]
-    let ifs_response_fire: logic = !frontend_redirect && ifs_is_requested && i_membus.rvalid;
-    #[ifdef(LOG_KONATA)]
-    let id_ex_fire: logic = ids_fire;
-
-    always_ff {
-        if_reset {
-            ifs_pc           = INITIAL_PC;
-            ifs_is_requested = 0;
-            ifs_pc_requested = 0;
-            idq_wvalid       = 0;
-            idq_wdata        = 0;
-
-            #[ifdef(LOG_KONATA)]
-            block {
-                ifs_trace_id_next      = 0;
-                ifs_trace_id_requested = 0;
-            }
-        } else {
-            block {
-                if ifs_is_requested {
-                    if i_membus.rvalid {
-                        ifs_is_requested = i_membus.rready && i_membus.rvalid;
-
-                        // 応答と同時に次の要求を受理
-                        if i_membus.rready && i_membus.rvalid {
-                            ifs_pc           = ifs_pc_next;
-                            ifs_pc_requested = ifs_pc;
-
-                            #[ifdef(LOG_KONATA)]
-                            block {
-                                ifs_trace_id_requested =  ifs_trace_id_next;
-                                ifs_trace_id_next      += 1;
-                            }
-                        }
-                    }
-                } else {
-                    // 最初の要求または応答待ち要求がない状態
-                    if i_membus.rready && i_membus.rvalid {
-                        ifs_is_requested = 1;
-                        ifs_pc           = ifs_pc_next;
-                        ifs_pc_requested = ifs_pc;
-
-                        #[ifdef(LOG_KONATA)]
-                        block {
-                            ifs_trace_id_requested =  ifs_trace_id_next;
-                            ifs_trace_id_next      += 1;
-                        }
-                    }
-                }
-                // IFのFIFOの制御
-                if ifs_is_requested && i_membus.rvalid {
-                    idq_wvalid     = 1;
-                    idq_wdata.addr = ifs_pc_requested;
-                    idq_wdata.bits = i_membus.rdata;
-                    #[ifdef(LOG_KONATA)]
-                    idq_wdata.trace_id = ifs_trace_id_requested;
-                } else {
-                    if idq_wvalid && idq_wready {
-                        idq_wvalid = 0;
-                    }
-                }
-            }
-        }
-    }
-
     ///////////////////////////////// ID Stage /////////////////////////////////
 
     let ids_valid     = i_membus.rvalid;
     let ids_inst_bits = i_membus.rdata;
 
     let ids_fire: logic = !control_hazard && !exs_branch_mispredict && i_membus.rvalid && i_membus.rready;
+    #[ifdef(LOG_KONATA)]
+    let id_ex_fire: logic = ids_fire;
 
     #[ifdef(LOG_KONATA)]
     let ids_trace_id: logic<64> = i_membus.trace_id;
@@ -229,10 +152,11 @@ module core (
     }
 
     inst decoder: inst_decoder (
-        bits : ids_inst_bits ,
-        valid: ids_inst_valid,
-        ctrl : ids_ctrl      ,
-        imm  : ids_imm       ,
+        bits  : ids_inst_bits  ,
+        is_rvc: i_membus.is_rvc,
+        valid : ids_inst_valid ,
+        ctrl  : ids_ctrl       ,
+        imm   : ids_imm        ,
     );
 
     always_comb {
@@ -248,6 +172,9 @@ module core (
 
         #[ifdef(LOG_KONATA)]
         exq_wdata.trace_id = i_membus.trace_id;
+
+        #[ifdef(LOG_KONATA)]
+        exq_wdata.pred_trace_id_next = i_membus.trace_id_next;
 
         // exception
         exq_wdata.expt = 0;
@@ -466,7 +393,7 @@ module core (
         if exs_brunit_take {
             exs_recovery_pc = exs_pc + exs_imm;
         } else {
-            exs_recovery_pc = exs_pc + 4;
+            exs_recovery_pc = exs_pc + (if exs_ctrl.is_rvc ? 2 : 4);
         }
 
         // ROBだけallocationされたり MEM FIFOだけ書き込まれたりするのを防ぐ
@@ -607,7 +534,7 @@ module core (
 
         rob_complete_data.result = switch {
             mems_ctrl.is_lui                     : memq_rdata.imm,
-            mems_ctrl.is_jump                    : memq_rdata.addr + 4,
+            mems_ctrl.is_jump                    : memq_rdata.addr + (if mems_ctrl.is_rvc ? 2 : 4),
             mems_ctrl.is_load || mems_ctrl.is_amo: memu_rdata,
             mems_ctrl.is_csr                     : csru_rdata,
             default                              : memq_rdata.alu_result
@@ -754,10 +681,9 @@ module core (
                 $display("");
                 $display("# %d", clock_count);
 
-                $display("IF ------");
-                $display("     pc : %h", ifs_pc);
-                $display(" is req : %b", ifs_is_requested);
-                $display(" pc req : %h", ifs_pc_requested);
+                $display("FRONTEND ------");
+                $display(" redirect : %b", frontend_redirect);
+                $display(" next pc  : %h", i_membus.next_pc);
                 $display("ID ------");
                 if ids_valid {
                     $display("  %h : %h", ids_pc, ids_inst_bits);
@@ -845,16 +771,17 @@ module core (
             } else {
                 $display("C\t1");
 
-                // IF stage
-                if ifs_request_fire {
-                    $display("I\t%0d\t%0d\t0", ifs_trace_id_next, ifs_trace_id_next);
-                    $display("S\t%0d\t0\tF", ifs_trace_id_next);
-                }
-
-                // ID stage
-                if ifs_response_fire {
-                    $display("L\t%0d\t0\t%h: %h", ifs_trace_id_requested, ifs_pc_requested, i_membus.rdata);
-                    $display("S\t%0d\t0\tD", ifs_trace_id_requested);
+                // IF / ID stage
+                if i_membus.trace_fetch_valid {
+                    $display("I\t%0d\t%0d\t0", i_membus.trace_fetch_id, i_membus.trace_fetch_id);
+                    $display("S\t%0d\t0\tF", i_membus.trace_fetch_id);
+                    $display(
+                        "L\t%0d\t0\t%h: %h",
+                        i_membus.trace_fetch_id,
+                        i_membus.trace_fetch_addr,
+                        i_membus.trace_fetch_bits,
+                    );
+                    $display("S\t%0d\t0\tD", i_membus.trace_fetch_id);
                 }
 
                 // EX stage
@@ -885,7 +812,7 @@ module core (
 
                 // 分岐・ジャンプ・例外による命令の破棄
                 if control_hazard || exs_branch_mispredict || prediction_redirect {
-                    for trace_id in (flush_begin as u32)..(ifs_trace_id_next as u32) {
+                    for trace_id in (flush_begin as u32)..(i_membus.trace_id_next as u32) {
                         $display("R\t%0d\t%0d\t1", trace_id, konata_retire_id);
                     }
                 }

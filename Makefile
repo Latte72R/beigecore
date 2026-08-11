@@ -27,7 +27,7 @@ SYNTH_TOP ?= core
 TIMING_PATHS ?= 10
 
 RV_TEST_DIR ?= test/share/riscv-tests
-RV_TEST_FILTER ?= rv64ui-p- rv64um-p- rv64ua-p-
+RV_TEST_FILTER ?= rv64ui-p- rv64um-p- rv64ua-p- rv64uc-p-
 RV_TEST_EXCLUDE ?= ma_data
 
 BOOTROM_HEX := bootrom.hex

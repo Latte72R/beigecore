@@ -40,6 +40,7 @@ module inst_fetcher (
         trace_id: logic<64>,
         addr    : Addr     ,
         bits    : Inst     ,
+        is_rvc  : logic    ,
     }
 
     var issue_fifo_flush : logic          ;
@@ -68,11 +69,6 @@ module inst_fetcher (
     #[ifdef(LOG_KONATA)]
     var trace_id_next: logic<64>;
     let issue_fire   : logic     = issue_fifo_wvalid && issue_fifo_wready;
-    always_comb {
-        // 通常のaddr、bits生成
-        #[ifdef(LOG_KONATA)]
-        issue_fifo_wdata.trace_id = trace_id_next;
-    }
     #[ifdef(LOG_KONATA)]
     always_ff {
         if_reset {
@@ -91,6 +87,22 @@ module inst_fetcher (
     var issue_saved_addr    : Addr     ;
     var issue_saved_bits    : logic<16>; // rdata[63:48]
 
+    // instruction converter
+    var rvcc_is_rvc: logic;
+    var rvcc_inst32: Inst ;
+
+    inst rvcc: rvc_converter (
+        inst16: case issue_pc_offset {
+            0      : fetch_fifo_rdata.bits[15:0],
+            2      : fetch_fifo_rdata.bits[31:16],
+            4      : fetch_fifo_rdata.bits[47:32],
+            6      : fetch_fifo_rdata.bits[63:48],
+            default: 0,
+        },
+        is_rvc: rvcc_is_rvc,
+        inst32: rvcc_inst32,
+    );
+
     always_ff {
         if_reset {
             issue_pc_offset      = 0;
@@ -104,7 +116,7 @@ module inst_fetcher (
             } else {
                 // offsetが6な32ビット命令の場合、
                 // アドレスと上位16ビットを保存してFIFOを読み進める
-                if issue_pc_offset == 6 && !issue_is_rdata_saved {
+                if issue_pc_offset == 6 && !rvcc_is_rvc && !issue_is_rdata_saved {
                     if fetch_fifo_rvalid {
                         issue_is_rdata_saved = 1;
                         issue_saved_addr     = fetch_fifo_rdata.addr;
@@ -113,7 +125,7 @@ module inst_fetcher (
                 } else {
                     if issue_fifo_wready {
                         if issue_fifo_wvalid {
-                            issue_pc_offset      += 4;
+                            issue_pc_offset      += if issue_is_rdata_saved || !rvcc_is_rvc ? 4 : 2;
                             issue_is_rdata_saved =  0;
                         }
                     }
@@ -132,29 +144,47 @@ module inst_fetcher (
         issue_fifo_wvalid = 0;
         issue_fifo_wdata  = 0;
 
+        // 通常のaddr、bits生成
+        #[ifdef(LOG_KONATA)]
+        issue_fifo_wdata.trace_id = trace_id_next;
+
         if !core_if.is_redirect && fetch_fifo_rvalid {
             if offset == 6 {
                 // offsetが6な32ビット命令の場合、
                 // 命令は{rdata_next[15:0], rdata[63:48}になる
                 if issue_is_rdata_saved {
-                    issue_fifo_wvalid     = 1;
-                    issue_fifo_wdata.addr = {issue_saved_addr[msb:3], offset};
-                    issue_fifo_wdata.bits = {rdata[15:0], issue_saved_bits};
+                    issue_fifo_wvalid       = 1;
+                    issue_fifo_wdata.addr   = {issue_saved_addr[msb:3], offset};
+                    issue_fifo_wdata.bits   = {rdata[15:0], issue_saved_bits};
+                    issue_fifo_wdata.is_rvc = 0;
                 } else {
-                    // Read next 8 bytes
-                    fetch_fifo_rready = 1;
+                    if rvcc_is_rvc {
+                        fetch_fifo_rready       = issue_fifo_wready;
+                        issue_fifo_wvalid       = 1;
+                        issue_fifo_wdata.addr   = {raddr[msb:3], offset};
+                        issue_fifo_wdata.is_rvc = 1;
+                        issue_fifo_wdata.bits   = rvcc_inst32;
+                    } else {
+                        // save inst[15:0]
+                        fetch_fifo_rready = 1; // Read next 8 bytes
+                    }
                 }
             } else {
-                fetch_fifo_rready     = issue_fifo_wready && offset == 4;
+                fetch_fifo_rready     = issue_fifo_wready && !rvcc_is_rvc && offset == 4;
                 issue_fifo_wvalid     = 1;
                 issue_fifo_wdata.addr = {raddr[msb:3], offset};
-                issue_fifo_wdata.bits = case offset {
-                    0      : rdata[31:0],
-                    2      : rdata[47:16],
-                    4      : rdata[63:32],
-                    default: 0,
-                };
+                if rvcc_is_rvc {
+                    issue_fifo_wdata.bits = rvcc_inst32;
+                } else {
+                    issue_fifo_wdata.bits = case offset {
+                        0      : rdata[31:0],
+                        2      : rdata[47:16],
+                        4      : rdata[63:32],
+                        default: 0,
+                    };
+                }
             }
+            issue_fifo_wdata.is_rvc = rvcc_is_rvc;
         }
     }
 
@@ -165,6 +195,25 @@ module inst_fetcher (
         core_if.rvalid    = issue_fifo_rvalid;
         core_if.raddr     = issue_fifo_rdata.addr;
         core_if.rdata     = issue_fifo_rdata.bits;
+        core_if.is_rvc    = issue_fifo_rdata.is_rvc;
+
+        #[ifdef(LOG_KONATA)]
+        core_if.trace_id = issue_fifo_rdata.trace_id;
+
+        #[ifdef(LOG_KONATA)]
+        core_if.trace_id_next = trace_id_next;
+
+        #[ifdef(LOG_KONATA)]
+        core_if.trace_fetch_valid = issue_fire;
+
+        #[ifdef(LOG_KONATA)]
+        core_if.trace_fetch_id = issue_fifo_wdata.trace_id;
+
+        #[ifdef(LOG_KONATA)]
+        core_if.trace_fetch_addr = issue_fifo_wdata.addr;
+
+        #[ifdef(LOG_KONATA)]
+        core_if.trace_fetch_bits = issue_fifo_wdata.bits;
     }
 
     /*--------- fetch logic ----------*/
