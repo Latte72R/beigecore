@@ -2,20 +2,12 @@ import eei::*;
 import corectrl::*;
 
 module core (
-    clk     : input   clock                          ,
-    rst     : input   reset                          ,
-    i_membus: modport membus_if::<ILEN, XLEN>::master,
-    d_membus: modport core_data_if::master           ,
-    led     : output  UIntX                          ,
+    clk     : input   clock               ,
+    rst     : input   reset               ,
+    i_membus: modport core_inst_if::master,
+    d_membus: modport core_data_if::master,
+    led     : output  UIntX               ,
 ) {
-    // ifのFIFOのデータ型
-    struct idq_type {
-        #[ifdef(LOG_KONATA)]
-        trace_id: logic<64>,
-        addr    : Addr     ,
-        bits    : Inst     ,
-    }
-
     struct exq_type {
         #[ifdef(LOG_KONATA)]
         trace_id: logic<64>,
@@ -70,15 +62,6 @@ module core (
         expt      : ExceptionInfo    ,
         raise_trap: logic            ,
     }
-
-    // FIFOの制御用レジスタ
-    var idq_wready    : logic   ;
-    var idq_wready_two: logic   ;
-    var idq_wvalid    : logic   ;
-    var idq_wdata     : idq_type;
-    var idq_rready    : logic   ;
-    var idq_rvalid    : logic   ;
-    var idq_rdata     : idq_type;
 
     // ID -> EXのFIFO
     var exq_wready: logic   ;
@@ -143,20 +126,21 @@ module core (
     var ids_pc             : Addr ;
     var ids_imm            : UIntX;
 
-    // 命令フェッチ処理
+    let frontend_redirect: logic = control_hazard || exs_branch_mispredict || prediction_redirect;
     always_comb {
-        // FIFOに2個以上空きがあるとき、命令をフェッチする
-        i_membus.valid = idq_wready_two;
-        i_membus.addr  = ifs_pc;
-        i_membus.wen   = 0;
-        i_membus.wdata = 'x; // wdataは使用しない
-        i_membus.wmask = 'x; // wmaskは使用しない
+        i_membus.is_redirect = frontend_redirect;
+
+        if control_hazard {
+            i_membus.next_pc = control_hazard_pc_next;
+        } else if exs_branch_mispredict {
+            i_membus.next_pc = exs_recovery_pc;
+        } else {
+            i_membus.next_pc = ids_pc + ids_imm;
+        }
     }
 
-    let frontend_redirect: logic = control_hazard || exs_branch_mispredict || prediction_redirect;
-    let ids_fire         : logic = !control_hazard && !exs_branch_mispredict && idq_rvalid && idq_rready;
     #[ifdef(LOG_KONATA)]
-    let ifs_request_fire: logic = !frontend_redirect && i_membus.ready && i_membus.valid
+    let ifs_request_fire: logic = !frontend_redirect && i_membus.rready && i_membus.rvalid
         && (!ifs_is_requested || i_membus.rvalid);
     #[ifdef(LOG_KONATA)]
     let ifs_response_fire: logic = !frontend_redirect && ifs_is_requested && i_membus.rvalid;
@@ -177,25 +161,13 @@ module core (
                 ifs_trace_id_requested = 0;
             }
         } else {
-            if control_hazard {
-                ifs_pc           = control_hazard_pc_next;
-                ifs_is_requested = 0;
-                idq_wvalid       = 0;
-            } else if exs_branch_mispredict {
-                ifs_pc           = exs_recovery_pc;
-                ifs_is_requested = 0;
-                idq_wvalid       = 0;
-            } else if prediction_redirect {
-                ifs_pc           = ids_pc + ids_imm;
-                ifs_is_requested = 0;
-                idq_wvalid       = 0;
-            } else {
+            block {
                 if ifs_is_requested {
                     if i_membus.rvalid {
-                        ifs_is_requested = i_membus.ready && i_membus.valid;
+                        ifs_is_requested = i_membus.rready && i_membus.rvalid;
 
                         // 応答と同時に次の要求を受理
-                        if i_membus.ready && i_membus.valid {
+                        if i_membus.rready && i_membus.rvalid {
                             ifs_pc           = ifs_pc_next;
                             ifs_pc_requested = ifs_pc;
 
@@ -208,7 +180,7 @@ module core (
                     }
                 } else {
                     // 最初の要求または応答待ち要求がない状態
-                    if i_membus.ready && i_membus.valid {
+                    if i_membus.rready && i_membus.rvalid {
                         ifs_is_requested = 1;
                         ifs_pc           = ifs_pc_next;
                         ifs_pc_requested = ifs_pc;
@@ -238,11 +210,13 @@ module core (
 
     ///////////////////////////////// ID Stage /////////////////////////////////
 
-    let ids_valid    : logic = idq_rvalid;
-    let ids_inst_bits: Inst  = idq_rdata.bits;
+    let ids_valid     = i_membus.rvalid;
+    let ids_inst_bits = i_membus.rdata;
+
+    let ids_fire: logic = !control_hazard && !exs_branch_mispredict && i_membus.rvalid && i_membus.rready;
 
     #[ifdef(LOG_KONATA)]
-    let ids_trace_id: logic<64> = idq_rdata.trace_id;
+    let ids_trace_id: logic<64> = i_membus.trace_id;
 
     var ids_inst_valid: logic   ;
     var ids_ctrl      : InstCtrl;
@@ -250,7 +224,7 @@ module core (
     // Backward Taken, Forward Not Taken の静的分岐予測
     let ids_pred_taken: logic = ids_inst_valid && inst_is_br(ids_ctrl) && ids_imm[msb];
     always_comb {
-        ids_pc              = idq_rdata.addr;
+        ids_pc              = i_membus.raddr;
         prediction_redirect = !control_hazard && ids_fire && ids_pred_taken;
     }
 
@@ -263,19 +237,17 @@ module core (
 
     always_comb {
         // ID -> EX
-        idq_rready = exq_wready;
-        exq_wvalid = idq_rvalid;
+        i_membus.rready = exq_wready;
+        exq_wvalid      = i_membus.rvalid;
 
-        exq_wdata.addr       = idq_rdata.addr;
-        exq_wdata.bits       = idq_rdata.bits;
+        exq_wdata.addr       = i_membus.raddr;
+        exq_wdata.bits       = i_membus.rdata;
         exq_wdata.ctrl       = ids_ctrl;
         exq_wdata.imm        = ids_imm;
         exq_wdata.pred_taken = ids_pred_taken;
 
         #[ifdef(LOG_KONATA)]
-        exq_wdata.trace_id = idq_rdata.trace_id;
-        #[ifdef(LOG_KONATA)]
-        exq_wdata.pred_trace_id_next = ifs_trace_id_next;
+        exq_wdata.trace_id = i_membus.trace_id;
 
         // exception
         exq_wdata.expt = 0;
@@ -519,7 +491,8 @@ module core (
         memq_wdata.rob_tag    = rob_allocate_tag;
 
         // exception
-        let instruction_address_misaligned: logic = memq_wdata.br_taken && memq_wdata.jump_addr[1:0] != 2'b00;
+        let instruction_address_misaligned: logic = IALIGN == 32 && memq_wdata.br_taken && memq_wdata.jump_addr[1:0]
+            != 2'b00;
         let memaddr                       : Addr  = if exs_ctrl.is_amo ? exs_rs1_data : exs_alu_result;
         let loadstore_address_misaligned  : logic = inst_is_memop(exs_ctrl)
             && case exs_ctrl.funct3[1:0] {
@@ -787,7 +760,7 @@ module core (
                 $display(" pc req : %h", ifs_pc_requested);
                 $display("ID ------");
                 if ids_valid {
-                    $display("  %h : %h", ids_pc, idq_rdata.bits);
+                    $display("  %h : %h", ids_pc, ids_inst_bits);
                     $display("  itype : %b", ids_ctrl.itype);
                     $display("  imm   : %h", ids_imm);
                 }
@@ -921,22 +894,6 @@ module core (
     }
 
     ///////////////////////////////// FIFO /////////////////////////////////
-
-    inst if_id_fifo: fifo #(
-        DATA_TYPE: idq_type,
-        WIDTH    : 3       ,
-    ) (
-        clk                                                                       ,
-        rst                                                                       ,
-        flush     : control_hazard || exs_branch_mispredict || prediction_redirect,
-        wready    : idq_wready                                                    ,
-        wready_two: idq_wready_two                                                ,
-        wvalid    : idq_wvalid                                                    ,
-        wdata     : idq_wdata                                                     ,
-        rready    : idq_rready                                                    ,
-        rvalid    : idq_rvalid                                                    ,
-        rdata     : idq_rdata                                                     ,
-    );
 
     inst id_ex_fifo: fifo #(
         DATA_TYPE: exq_type,

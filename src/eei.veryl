@@ -1,6 +1,8 @@
 package eei {
-    const XLEN  : u32         = 64;
-    const ILEN  : u32         = 32;
+    const XLEN  : u32 = 64;
+    const ILEN  : u32 = 32;
+    const IALIGN: u32 = 16;
+
     type UIntX  = logic<XLEN>;
     type UInt32 = logic<32>  ;
     type UInt64 = logic<64>  ;
