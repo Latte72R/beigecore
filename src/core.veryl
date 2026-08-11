@@ -144,8 +144,10 @@ module core (
     var ids_inst_valid: logic   ;
     var ids_ctrl      : InstCtrl;
 
-    // Backward Taken, Forward Not Taken の静的分岐予測
-    let ids_pred_taken: logic = ids_inst_valid && inst_is_br(ids_ctrl) && ids_imm[msb];
+    var bimodal_pred_taken: logic;
+
+    // 2-bit bimodal分岐予測
+    let ids_pred_taken: logic = ids_inst_valid && inst_is_br(ids_ctrl) && bimodal_pred_taken;
     always_comb {
         ids_pc              = i_membus.raddr;
         prediction_redirect = !control_hazard && ids_fire && ids_pred_taken;
@@ -819,6 +821,20 @@ module core (
             }
         }
     }
+
+    ///////////////////////////////// Bimodal /////////////////////////////////
+
+    inst bp: bimodal_predictor (
+        clk  ,
+        rst  ,
+
+        predict_pc   : ids_pc            ,
+        predict_taken: bimodal_pred_taken,
+
+        update_valid: rob_allocate_fire && inst_is_br(exs_ctrl),
+        update_pc   : exs_pc                                   ,
+        update_taken: exs_brunit_take                          ,
+    );
 
     ///////////////////////////////// FIFO /////////////////////////////////
 

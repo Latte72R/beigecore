@@ -1,0 +1,64 @@
+import eei::*;
+
+module bimodal_predictor (
+    clk: input clock,
+    rst: input reset,
+
+    // ID段からの予測要求
+    predict_pc   : input  Addr ,
+    predict_taken: output logic,
+
+    // EX段からの更新
+    update_valid: input logic,
+    update_pc   : input Addr ,
+    update_taken: input logic,
+) {
+    const INDEX_WIDTH: u32 = 8;
+    const ENTRY_COUNT: u32 = 2 ** INDEX_WIDTH;
+
+    type Counter = logic<2>;
+
+    // PCは2-byte境界なのでbit 0を捨てる
+    let predict_index: logic<INDEX_WIDTH> = predict_pc[INDEX_WIDTH:1];
+
+    let update_index: logic<INDEX_WIDTH> = update_pc[INDEX_WIDTH:1];
+
+    // カウンタ本体にはリセットを付けない
+    var counters: Counter [ENTRY_COUNT];
+
+    // 未初期化のカウンタを参照しないためのvalidビット
+    // packed vectorなので 配列をforループでリセットする必要がない
+    var counter_valid: logic<ENTRY_COUNT>;
+
+    // 2-bitカウンタのMSBを予測結果にする
+    always_comb {
+        if counter_valid[predict_index] {
+            predict_taken = counters[predict_index][1];
+        } else {
+            predict_taken = 0;
+        }
+    }
+
+    always_ff {
+        if_reset {
+            counter_valid = 0;
+        } else if update_valid {
+            if !counter_valid[update_index] {
+                counter_valid[update_index] = 1;
+                counters[update_index]      = if update_taken ? 2'b10 : 2'b01;
+            } else {
+                if update_taken {
+                    // Takenなら飽和インクリメント
+                    if counters[update_index] != 2'b11 {
+                        counters[update_index] += 1;
+                    }
+                } else {
+                    // Not Takenなら飽和デクリメント
+                    if counters[update_index] != 2'b00 {
+                        counters[update_index] -= 1;
+                    }
+                }
+            }
+        }
+    }
+}
