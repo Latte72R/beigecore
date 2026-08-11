@@ -206,53 +206,111 @@ module mulunit #(
         AddLoop,
         Finish,
     }
-    const STEP: u32 = 4;
+    const STEP: u32 = 16;
 
-    var state      : State           ;
-    var op1zext    : logic<WIDTH * 2>;
-    var op2shift   : logic<WIDTH>    ;
-    var accumulator: logic<WIDTH * 2>;
+    var state       : State           ;
+    var op1zext     : logic<WIDTH * 2>;
+    var op2zext     : logic<WIDTH * 2>;
+    var result_sum  : logic<WIDTH * 2>;
+    var result_carry: logic<WIDTH * 2>;
 
-    var partial  : logic<WIDTH * 2>;
-    var add_count: logic<7>        ;
+    var partial_sum  : logic<WIDTH * 2>;
+    var partial_carry: logic<WIDTH * 2>;
+    var add_count    : logic<7>        ;
+
+    // 16 partial products and the carry-save accumulator are reduced to
+    // two operands without propagating carries between bits.
+    var level0: logic<WIDTH * 2> [18];
+    var level1: logic<WIDTH * 2> [12];
+    var level2: logic<WIDTH * 2> [8] ;
+    var level3: logic<WIDTH * 2> [6] ;
+    var level4: logic<WIDTH * 2> [4] ;
+    var level5: logic<WIDTH * 2> [3] ;
+
+    function csa_sum (
+        a: input logic<WIDTH * 2>,
+        b: input logic<WIDTH * 2>,
+        c: input logic<WIDTH * 2>,
+    ) -> logic<WIDTH * 2> {
+        return a ^ b ^ c;
+    }
+
+    function csa_carry (
+        a: input logic<WIDTH * 2>,
+        b: input logic<WIDTH * 2>,
+        c: input logic<WIDTH * 2>,
+    ) -> logic<WIDTH * 2> {
+        return ((a & b) | (b & c) | (a & c)) << 1;
+    }
 
     always_comb {
         rvalid = state == State::Finish;
 
-        partial = 0;
-        for i in 0..STEP {
-            if op2shift[i] {
-                partial += op1zext << i;
-            }
+        for i in 0..16 {
+            level0[i] = if op2zext[i] ? op1zext << i : 0;
         }
+        level0[16] = result_sum;
+        level0[17] = result_carry;
+
+        for i in 0..6 {
+            level1[i * 2]     = csa_sum(level0[i * 3], level0[i * 3 + 1], level0[i * 3 + 2]);
+            level1[i * 2 + 1] = csa_carry(level0[i * 3], level0[i * 3 + 1], level0[i * 3 + 2]);
+        }
+
+        for i in 0..4 {
+            level2[i * 2]     = csa_sum(level1[i * 3], level1[i * 3 + 1], level1[i * 3 + 2]);
+            level2[i * 2 + 1] = csa_carry(level1[i * 3], level1[i * 3 + 1], level1[i * 3 + 2]);
+        }
+
+        for i in 0..2 {
+            level3[i * 2]     = csa_sum(level2[i * 3], level2[i * 3 + 1], level2[i * 3 + 2]);
+            level3[i * 2 + 1] = csa_carry(level2[i * 3], level2[i * 3 + 1], level2[i * 3 + 2]);
+        }
+        level3[4] = level2[6];
+        level3[5] = level2[7];
+
+        for i in 0..2 {
+            level4[i * 2]     = csa_sum(level3[i * 3], level3[i * 3 + 1], level3[i * 3 + 2]);
+            level4[i * 2 + 1] = csa_carry(level3[i * 3], level3[i * 3 + 1], level3[i * 3 + 2]);
+        }
+
+        level5[0] = csa_sum(level4[0], level4[1], level4[2]);
+        level5[1] = csa_carry(level4[0], level4[1], level4[2]);
+        level5[2] = level4[3];
+
+        partial_sum   = csa_sum(level5[0], level5[1], level5[2]);
+        partial_carry = csa_carry(level5[0], level5[1], level5[2]);
     }
 
     always_ff {
         if_reset {
-            state       = State::Idle;
-            result      = 0;
-            accumulator = 0;
-            add_count   = 0;
-            op1zext     = 0;
-            op2shift    = 0;
+            state        = State::Idle;
+            result       = 0;
+            result_sum   = 0;
+            result_carry = 0;
+            add_count    = 0;
+            op1zext      = 0;
+            op2zext      = 0;
         } else {
             case state {
                 State::Idle   : if valid {
-                    state       = State::AddLoop;
-                    result      = 0;
-                    accumulator = 0;
-                    add_count   = 0;
-                    op1zext     = {1'b0 repeat WIDTH, op1};
-                    op2shift    = op2;
+                    state        = State::AddLoop;
+                    result       = 0;
+                    result_sum   = 0;
+                    result_carry = 0;
+                    add_count    = 0;
+                    op1zext      = {1'b0 repeat WIDTH, op1};
+                    op2zext      = {1'b0 repeat WIDTH, op2};
                 }
                 State::AddLoop: if add_count == WIDTH as 7 {
                     state  = State::Finish;
-                    result = accumulator;
+                    result = result_sum + result_carry;
                 } else {
-                    accumulator +=  partial;
-                    op1zext     <<= STEP;
-                    op2shift    >>= STEP;
-                    add_count   +=  STEP as 7;
+                    result_sum   =   partial_sum;
+                    result_carry =   partial_carry;
+                    op1zext      <<= STEP;
+                    op2zext      >>= STEP;
+                    add_count    +=  STEP as 7;
                 }
                 State::Finish : state = State::Idle;
                 default       : {}
