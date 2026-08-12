@@ -25,13 +25,15 @@ module alu (
     let add32: UInt32 = op1[31:0] + op2[31:0];
     let sub32: UInt32 = op1[31:0] - op2[31:0];
 
-    let sll: UIntX = op1 << op2[5:0];
-    let srl: UIntX = op1 >> op2[5:0];
-    let sra: SIntX = $signed(op1) >>> op2[5:0];
+    let sll     : UIntX           = op1 << op2[5:0];
+    let sr_input: logic<XLEN + 1> = {ctrl.funct7[5] & op1[msb], op1};
+    let sr_ext  : logic<XLEN + 1> = $signed(sr_input) >>> op2[5:0];
+    let sr      : UIntX           = sr_ext[XLEN - 1:0];
 
-    let sll32: UInt32 = op1[31:0] << op2[4:0];
-    let srl32: UInt32 = op1[31:0] >> op2[4:0];
-    let sra32: SInt32 = $signed(op1[31:0]) >>> op2[4:0];
+    let sll32     : UInt32     = op1[31:0] << op2[4:0];
+    let sr32_input: logic <33> = {ctrl.funct7[5] & op1[31], op1[31:0]};
+    let sr32_ext  : logic <33> = $signed(sr32_input) >>> op2[4:0];
+    let sr32      : UInt32     = sr32_ext[31:0];
 
     let slt : UIntX = {1'b0 repeat XLEN - 1, $signed(op1) <: $signed(op2)};
     let sltu: UIntX = {1'b0 repeat XLEN - 1, op1 <: op2};
@@ -48,11 +50,7 @@ module alu (
                 3'b010 : result = slt;
                 3'b011 : result = sltu;
                 3'b100 : result = op1 ^ op2;
-                3'b101 : result = if ctrl.funct7[5] == 0 ?
-                    sel_w(ctrl.is_op32, srl32, srl)
-                :
-                    sel_w(ctrl.is_op32, sra32, sra)
-                ;
+                3'b101 : result = sel_w(ctrl.is_op32, sr32, sr);
                 3'b110 : result = op1 | op2;
                 3'b111 : result = op1 & op2;
                 default: result = 'x;

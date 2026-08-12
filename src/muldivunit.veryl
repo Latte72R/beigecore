@@ -331,7 +331,7 @@ module divunit #(
     quotient : output logic<WIDTH>,
     remainder: output logic<WIDTH>,
 ) {
-    const STEP: u32 = 2;
+    const STEP: u32 = 4;
 
     enum State {
         Idle,
@@ -351,15 +351,20 @@ module divunit #(
         rvalid    = state == State::Finish;
         remainder = dividend_saved[WIDTH - 1:0];
 
-        let qbit0          : logic            = dividend_saved >= divisor_saved;
-        let dividend_after0: logic<WIDTH * 2> = if qbit0 ? dividend_saved - divisor_saved : dividend_saved;
-        let divisor_after0 : logic<WIDTH * 2> = divisor_saved >> 1;
-        let qbit1          : logic            = dividend_after0 >= divisor_after0;
-        let dividend_after1: logic<WIDTH * 2> = if qbit1 ? dividend_after0 - divisor_after0 : dividend_after0;
+        var qbit         : logic<STEP>     ;
+        var dividend_work: logic<WIDTH * 2>;
+        var divisor_work : logic<WIDTH * 2>;
+        dividend_work = dividend_saved;
+        divisor_work  = divisor_saved;
+        for i in 0..STEP {
+            qbit[STEP - i - 1] =   dividend_work >= divisor_work;
+            dividend_work      =   if qbit[STEP - i - 1] ? dividend_work - divisor_work : dividend_work;
+            divisor_work       >>= 1;
+        }
 
-        next_dividend = dividend_after1;
-        next_divisor  = divisor_saved >> STEP;
-        next_quotient = (quotient << STEP) + {1'b0 repeat WIDTH - STEP, qbit0, qbit1};
+        next_dividend = dividend_work;
+        next_divisor  = divisor_work;
+        next_quotient = (quotient << STEP) + {1'b0 repeat WIDTH - STEP, qbit};
     }
 
     var sub_count: u32;
