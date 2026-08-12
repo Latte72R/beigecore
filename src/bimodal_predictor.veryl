@@ -41,7 +41,7 @@ module bimodal_predictor (
 
     always_ff {
         if_reset {
-            counter_valid = 0;
+            counter_valid = 1;
         } else if update_valid {
             if !counter_valid[update_index] {
                 counter_valid[update_index] = 1;

@@ -19,18 +19,20 @@ module core (
     }
 
     struct memq_type {
-        rob_tag   : RobTag          ,
-        addr      : Addr            ,
-        bits      : Inst            ,
-        ctrl      : InstCtrl        ,
-        imm       : UIntX           ,
-        expt      : ExceptionInfo   ,
-        alu_result: UIntX           ,
-        rs1_addr  : logic        <5>,
-        rs1_data  : UIntX           ,
-        rs2_data  : UIntX           ,
-        br_taken  : logic           ,
-        jump_addr : Addr            ,
+        rob_tag    : RobTag          ,
+        addr       : Addr            ,
+        bits       : Inst            ,
+        ctrl       : InstCtrl        ,
+        imm        : UIntX           ,
+        expt       : ExceptionInfo   ,
+        alu_result : UIntX           ,
+        rs1_addr   : logic        <5>,
+        rs1_data   : UIntX           ,
+        rs2_data   : UIntX           ,
+        br_taken   : logic           ,
+        jump_addr  : Addr            ,
+        pred_taken : logic           ,
+        pred_target: Addr            ,
     }
 
     struct rob_entry_type {
@@ -155,7 +157,6 @@ module core (
         exq_wdata.ctrl = ids_ctrl;
         exq_wdata.imm  = ids_imm;
 
-        exq_wdata.pred_taken  = ids_pred_taken;
         exq_wdata.pred_taken  = ids_pred_taken;
         exq_wdata.pred_target = ids_pred_target;
 
@@ -368,8 +369,7 @@ module core (
         // 予測の確認
         exs_is_jalr               = exs_ctrl.is_jump && exs_ctrl.itype == InstType::I;
         exs_actual_target         = exs_alu_result & ~1;
-        let exs_jalr_mispredict      : logic = rob_allocate_fire && exs_is_jalr
-            && (!exq_rdata.pred_taken || exq_rdata.pred_target != exs_actual_target);
+        let exs_jalr_mispredict      : logic = rob_allocate_fire && exs_is_jalr && !exq_rdata.pred_taken;
         let exs_branch_mispredict    : logic = rob_allocate_fire && inst_is_br(exs_ctrl)
             && (exq_rdata.pred_taken != exs_brunit_take);
         exs_prediction_mispredict = exs_branch_mispredict || exs_jalr_mispredict;
@@ -399,6 +399,9 @@ module core (
         memq_wdata.br_taken   = exs_ctrl.is_jump || inst_is_br(exs_ctrl) && exs_brunit_take;
         memq_wdata.jump_addr  = if inst_is_br(exs_ctrl) ? exs_pc + exs_imm : exs_alu_result & ~1;
         memq_wdata.rob_tag    = rob_allocate_tag;
+
+        memq_wdata.pred_taken  = exq_rdata.pred_taken;
+        memq_wdata.pred_target = exq_rdata.pred_target;
 
         // exception
         let instruction_address_misaligned: logic = IALIGN == 32 && memq_wdata.br_taken && memq_wdata.jump_addr[1:0]
@@ -438,6 +441,10 @@ module core (
     let mems_ctrl     : InstCtrl         = memq_rdata.ctrl;
     let mems_expt     : ExceptionInfo    = memq_rdata.expt;
     let mems_rd_addr  : logic        <5> = mems_inst_bits[11:7];
+
+    let mems_is_jalr               : logic = mems_ctrl.is_jump && mems_ctrl.itype == InstType::I;
+    let mems_jalr_target_mispredict: logic = mems_valid && mems_is_jalr && memq_rdata.pred_taken
+        && memq_rdata.pred_target != memq_rdata.jump_addr;
 
     let mems_is_store   : logic = inst_is_store(mems_ctrl);
     let mems_at_rob_head: logic = rob_head_valid && rob_head_tag == memq_rdata.rob_tag;
@@ -530,8 +537,8 @@ module core (
     }
 
     always_comb {
-        control_hazard         = mems_valid && mems_can_execute && csru_raise_trap;
-        control_hazard_pc_next = csru_trap_vector;
+        control_hazard         = mems_valid && mems_can_execute && (csru_raise_trap || mems_jalr_target_mispredict);
+        control_hazard_pc_next = if csru_raise_trap ? csru_trap_vector : memq_rdata.jump_addr;
     }
 
     ///////////////////////////////// WB Stage /////////////////////////////////
