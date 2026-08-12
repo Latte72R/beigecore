@@ -1,0 +1,44 @@
+import eei::*;
+
+module branch_target_buffer (
+    clk: input clock,
+    rst: input reset,
+
+    // ID Stage: PCから予測
+    predict_pc    : input  Addr ,
+    predict_hit   : output logic,
+    predict_target: output Addr ,
+
+    // EX Stage: 実際のjalrターゲットで更新
+    update_valid : input logic,
+    update_pc    : input Addr ,
+    update_target: input Addr ,
+) {
+    const INDEX_WIDTH: u32 = 6;
+    const ENTRY_COUNT: u32 = 2 ** INDEX_WIDTH;
+
+    let predict_index: logic<INDEX_WIDTH> = predict_pc[INDEX_WIDTH:1];
+
+    let update_index: logic<INDEX_WIDTH> = update_pc[INDEX_WIDTH:1];
+
+    var valid : logic<ENTRY_COUNT>              ;
+    var tag   : Addr               [ENTRY_COUNT];
+    var target: Addr               [ENTRY_COUNT];
+
+    always_comb {
+        predict_hit = valid[predict_index] && tag[predict_index] == predict_pc;
+
+        predict_target = target[predict_index];
+    }
+
+    #[allow(missing_reset_statement)]
+    always_ff {
+        if_reset {
+            valid = 0;
+        } else if update_valid {
+            valid[update_index]  = 1;
+            tag[update_index]    = update_pc;
+            target[update_index] = update_target;
+        }
+    }
+}

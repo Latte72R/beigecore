@@ -9,12 +9,13 @@ module core (
     led     : output  UIntX               ,
 ) {
     struct exq_type {
-        addr      : Addr         ,
-        bits      : Inst         ,
-        ctrl      : InstCtrl     ,
-        imm       : UIntX        ,
-        expt      : ExceptionInfo,
-        pred_taken: logic        ,
+        addr       : Addr         ,
+        bits       : Inst         ,
+        ctrl       : InstCtrl     ,
+        imm        : UIntX        ,
+        expt       : ExceptionInfo,
+        pred_taken : logic        ,
+        pred_target: Addr         ,
     }
 
     struct memq_type {
@@ -88,23 +89,25 @@ module core (
     var control_hazard        : logic;
     var control_hazard_pc_next: Addr ;
 
-    var exs_branch_mispredict: logic;
-    var exs_recovery_pc      : Addr ;
+    var exs_recovery_pc          : Addr ;
+    var exs_is_jalr              : logic;
+    var exs_actual_target        : Addr ;
+    var exs_prediction_mispredict: logic;
 
     var prediction_redirect: logic;
-    var ids_pc             : Addr ;
     var ids_imm            : UIntX;
+    var ids_pred_target    : Addr ;
 
-    let frontend_redirect: logic = control_hazard || exs_branch_mispredict || prediction_redirect;
+    let frontend_redirect: logic = control_hazard || exs_prediction_mispredict || prediction_redirect;
     always_comb {
         i_membus.is_redirect = frontend_redirect;
 
         if control_hazard {
             i_membus.next_pc = control_hazard_pc_next;
-        } else if exs_branch_mispredict {
+        } else if exs_prediction_mispredict {
             i_membus.next_pc = exs_recovery_pc;
         } else {
-            i_membus.next_pc = ids_pc + ids_imm;
+            i_membus.next_pc = ids_pred_target;
         }
     }
 
@@ -113,17 +116,25 @@ module core (
     let ids_valid     = i_membus.rvalid;
     let ids_inst_bits = i_membus.rdata;
 
-    let ids_fire      : logic    = !control_hazard && !exs_branch_mispredict && i_membus.rvalid && i_membus.rready;
+    let ids_fire      : logic    = !control_hazard && !exs_prediction_mispredict && i_membus.rvalid && i_membus.rready;
     var ids_inst_valid: logic   ;
     var ids_ctrl      : InstCtrl;
 
     var bimodal_pred_taken: logic;
 
-    // 2-bit bimodal分岐予測
-    let ids_pred_taken: logic = ids_inst_valid && inst_is_br(ids_ctrl) && bimodal_pred_taken;
+    var btb_hit   : logic;
+    var btb_target: Addr ;
+
+    let ids_is_jal : logic = ids_ctrl.is_jump && ids_ctrl.itype == InstType::J;
+    let ids_is_jalr: logic = ids_ctrl.is_jump && ids_ctrl.itype == InstType::I;
+
+    let ids_pred_taken: logic = ids_inst_valid
+        && (ids_is_jal || (ids_is_jalr && btb_hit) || (inst_is_br(ids_ctrl) && bimodal_pred_taken));
+
+    let ids_pc: Addr = i_membus.raddr;
     always_comb {
-        ids_pc              = i_membus.raddr;
         prediction_redirect = !control_hazard && ids_fire && ids_pred_taken;
+        ids_pred_target     = if ids_is_jalr ? btb_target : ids_pc + ids_imm;
     }
 
     inst decoder: inst_decoder (
@@ -139,11 +150,14 @@ module core (
         i_membus.rready = exq_wready;
         exq_wvalid      = i_membus.rvalid;
 
-        exq_wdata.addr       = i_membus.raddr;
-        exq_wdata.bits       = i_membus.rdata;
-        exq_wdata.ctrl       = ids_ctrl;
-        exq_wdata.imm        = ids_imm;
-        exq_wdata.pred_taken = ids_pred_taken;
+        exq_wdata.addr = i_membus.raddr;
+        exq_wdata.bits = i_membus.rdata;
+        exq_wdata.ctrl = ids_ctrl;
+        exq_wdata.imm  = ids_imm;
+
+        exq_wdata.pred_taken  = ids_pred_taken;
+        exq_wdata.pred_taken  = ids_pred_taken;
+        exq_wdata.pred_target = ids_pred_target;
 
         // exception
         exq_wdata.expt = 0;
@@ -351,9 +365,18 @@ module core (
 
     always_comb {
         // EX -> MEM
-        // 分岐予測の確認
-        exs_branch_mispredict = rob_allocate_fire && inst_is_br(exs_ctrl) && (exq_rdata.pred_taken != exs_brunit_take);
-        if exs_brunit_take {
+        // 予測の確認
+        exs_is_jalr               = exs_ctrl.is_jump && exs_ctrl.itype == InstType::I;
+        exs_actual_target         = exs_alu_result & ~1;
+        let exs_jalr_mispredict      : logic = rob_allocate_fire && exs_is_jalr
+            && (!exq_rdata.pred_taken || exq_rdata.pred_target != exs_actual_target);
+        let exs_branch_mispredict    : logic = rob_allocate_fire && inst_is_br(exs_ctrl)
+            && (exq_rdata.pred_taken != exs_brunit_take);
+        exs_prediction_mispredict = exs_branch_mispredict || exs_jalr_mispredict;
+
+        if exs_is_jalr {
+            exs_recovery_pc = exs_actual_target;
+        } else if exs_brunit_take {
             exs_recovery_pc = exs_pc + exs_imm;
         } else {
             exs_recovery_pc = exs_pc + (if exs_ctrl.is_rvc ? 2 : 4);
@@ -507,8 +530,8 @@ module core (
     }
 
     always_comb {
-        control_hazard         = mems_valid && mems_can_execute && (csru_raise_trap || mems_ctrl.is_jump);
-        control_hazard_pc_next = if csru_raise_trap ? csru_trap_vector : memq_rdata.jump_addr;
+        control_hazard         = mems_valid && mems_can_execute && csru_raise_trap;
+        control_hazard_pc_next = csru_trap_vector;
     }
 
     ///////////////////////////////// WB Stage /////////////////////////////////
@@ -750,17 +773,17 @@ module core (
                         mems_inst_bits,
                         control_hazard_pc_next,
                     );
-                } else if exs_branch_mispredict {
+                } else if exs_prediction_mispredict {
                     $display("K\t%0d\tR\tBR\t%h\t%h\t%h", trace_cycle, exs_pc, exs_inst_bits, exs_recovery_pc);
                 } else if prediction_redirect {
-                    $display("K\t%0d\tR\tPRED\t%h\t%h\t%h", trace_cycle, ids_pc, ids_inst_bits, ids_pc + ids_imm);
+                    $display("K\t%0d\tR\tPRED\t%h\t%h\t%h", trace_cycle, ids_pc, ids_inst_bits, ids_pred_target);
                 }
                 trace_cycle += 1;
             }
         }
     }
 
-    ///////////////////////////////// Bimodal /////////////////////////////////
+    ///////////////////////////////// Bimodal & BTB/////////////////////////////////
 
     inst bp: bimodal_predictor (
         clk  ,
@@ -774,21 +797,34 @@ module core (
         update_taken: exs_brunit_take                          ,
     );
 
+    inst btb: branch_target_buffer (
+        clk  ,
+        rst  ,
+
+        predict_pc    : ids_pc    ,
+        predict_hit   : btb_hit   ,
+        predict_target: btb_target,
+
+        update_valid : rob_allocate_fire && exs_is_jalr,
+        update_pc    : exs_pc                          ,
+        update_target: exs_actual_target               ,
+    );
+
     ///////////////////////////////// FIFO /////////////////////////////////
 
     inst id_ex_fifo: fifo #(
         DATA_TYPE: exq_type,
         WIDTH    : 2       ,
     ) (
-        clk                                            ,
-        rst                                            ,
-        flush : control_hazard || exs_branch_mispredict,
-        wready: exq_wready                             ,
-        wvalid: exq_wvalid                             ,
-        wdata : exq_wdata                              ,
-        rready: exq_rready                             ,
-        rvalid: exq_rvalid                             ,
-        rdata : exq_rdata                              ,
+        clk                                                ,
+        rst                                                ,
+        flush : control_hazard || exs_prediction_mispredict,
+        wready: exq_wready                                 ,
+        wvalid: exq_wvalid                                 ,
+        wdata : exq_wdata                                  ,
+        rready: exq_rready                                 ,
+        rvalid: exq_rvalid                                 ,
+        rdata : exq_rdata                                  ,
     );
 
     inst ex_mem_fifo: fifo #(
