@@ -17,11 +17,12 @@ DEBUG_VERILATOR_CPPFLAGS := $(filter -D%,$(DEBUG_VERILATOR_FLAGS))
 
 KONATA_SIM_DIR := $(OBJ_DIR)_konata
 KONATA_SIM := $(KONATA_SIM_DIR)/konata-sim
-KONATA_VERILATOR_FLAGS ?= -DLOG_KONATA -DVL_USER_FINISH
+KONATA_VERILATOR_FLAGS ?= -DLOG_PIPELINE -DVL_USER_FINISH
 KONATA_VERILATOR_CPPFLAGS := $(filter -D%,$(KONATA_VERILATOR_FLAGS))
 KONATA_RAM ?= test/sample.hex
 KONATA_CYCLES ?= 1000
 KONATA_LOG ?= results/konata.log
+KONATA_RAW ?= results/konata.raw
 
 SYNTH_TOP ?= core
 TIMING_PATHS ?= 10
@@ -123,9 +124,10 @@ debug: $(DEBUG_SIM) ## Build and run FILE (for example: make debug FILE=debug_ou
 	DBG_ADDR=$(DEBUG_ADDR) $(DEBUG_SIM) $(BOOTROM_HEX) $(DEBUG_HEX)
 
 konata: $(KONATA_SIM) ## Generate a Konata pipeline trace
-	@mkdir -p $(dir $(KONATA_LOG))
+	@mkdir -p $(dir $(KONATA_LOG)) $(dir $(KONATA_RAW))
 	@DBG_ADDR=$(DEBUG_ADDR) $(KONATA_SIM) \
-		$(BOOTROM_HEX) $(KONATA_RAM) $(KONATA_CYCLES) > $(KONATA_LOG)
+		$(BOOTROM_HEX) $(KONATA_RAM) $(KONATA_CYCLES) > $(KONATA_RAW)
+	@python3 test/konata.py $(KONATA_RAW) > $(KONATA_LOG)
 	@echo "Konata trace: $(KONATA_LOG)"
 
 bench: $(KONATA_SIM) ## Build and run CoreMark with a Konata trace
@@ -134,11 +136,12 @@ bench: $(KONATA_SIM) ## Build and run CoreMark with a Konata trace
 		exit 1; \
 	}
 	$(MAKE) -C $(COREMARK_DIR) coremark COREMARK_ITERATIONS=$(COREMARK_ITERATIONS)
-	@mkdir -p $(dir $(COREMARK_RESULT)) $(dir $(KONATA_LOG))
+	@mkdir -p $(dir $(COREMARK_RESULT)) $(dir $(KONATA_LOG)) $(dir $(KONATA_RAW))
 	@DBG_ADDR=$(COREMARK_DBG_ADDR) $(KONATA_SIM) \
 		$(BOOTROM_HEX) $(COREMARK_HEX) $(COREMARK_CYCLES) \
-		> $(KONATA_LOG) 2> $(COREMARK_RESULT); \
+		> $(KONATA_RAW) 2> $(COREMARK_RESULT); \
 	status=$$?; \
+	python3 test/konata.py $(KONATA_RAW) > $(KONATA_LOG) || status=$$?; \
 	tail -n 5 $(COREMARK_RESULT); \
 	echo "Konata trace: $(KONATA_LOG)"; \
 	exit $$status

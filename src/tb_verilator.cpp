@@ -1,5 +1,5 @@
-#if defined(PRINT_DEBUG) && defined(LOG_KONATA)
-#error "PRINT_DEBUG and LOG_KONATA cannot be enabled together"
+#if defined(PRINT_DEBUG) && defined(LOG_PIPELINE)
+#error "PRINT_DEBUG and LOG_PIPELINE cannot be enabled together"
 #endif
 
 #include "Vcore_top.h"
@@ -14,7 +14,7 @@
 #include <termios.h>
 #include <verilated.h>
 
-#if defined(LOG_KONATA) && defined(VL_USER_FINISH)
+#if defined(LOG_PIPELINE) && defined(VL_USER_FINISH)
 void vl_finish(const char *, int, const char *) { Verilated::gotFinish(true); }
 #endif
 

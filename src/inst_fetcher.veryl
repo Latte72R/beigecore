@@ -21,7 +21,7 @@ module inst_fetcher (
 
     inst fetch_fifo: fifo #(
         DATA_TYPE: fetch_fifo_type,
-        WIDTH    : 3              ,
+        WIDTH    : 2              ,
     ) (
         clk                          ,
         rst                          ,
@@ -36,11 +36,9 @@ module inst_fetcher (
     );
 
     struct issue_fifo_type {
-        #[ifdef(LOG_KONATA)]
-        trace_id: logic<64>,
-        addr    : Addr     ,
-        bits    : Inst     ,
-        is_rvc  : logic    ,
+        addr  : Addr ,
+        bits  : Inst ,
+        is_rvc: logic,
     }
 
     var issue_fifo_flush : logic          ;
@@ -53,7 +51,7 @@ module inst_fetcher (
 
     inst issue_fifo: fifo #(
         DATA_TYPE: issue_fifo_type,
-        WIDTH    : 3              ,
+        WIDTH    : 2              ,
     ) (
         clk                      ,
         rst                      ,
@@ -66,19 +64,7 @@ module inst_fetcher (
         rdata : issue_fifo_rdata ,
     );
 
-    #[ifdef(LOG_KONATA)]
-    var trace_id_next: logic<64>;
-    let issue_fire   : logic     = issue_fifo_wvalid && issue_fifo_wready;
-    #[ifdef(LOG_KONATA)]
-    always_ff {
-        if_reset {
-            trace_id_next = 0;
-        } else {
-            if issue_fire {
-                trace_id_next += 1;
-            }
-        }
-    }
+    let issue_fire: logic = issue_fifo_wvalid && issue_fifo_wready;
 
     /*--------- issue logic ----------*/
     var issue_pc_offset: logic<3>;
@@ -144,10 +130,6 @@ module inst_fetcher (
         issue_fifo_wvalid = 0;
         issue_fifo_wdata  = 0;
 
-        // 通常のaddr、bits生成
-        #[ifdef(LOG_KONATA)]
-        issue_fifo_wdata.trace_id = trace_id_next;
-
         if !core_if.is_redirect && fetch_fifo_rvalid {
             if offset == 6 {
                 // offsetが6な32ビット命令の場合、
@@ -197,23 +179,6 @@ module inst_fetcher (
         core_if.rdata     = issue_fifo_rdata.bits;
         core_if.is_rvc    = issue_fifo_rdata.is_rvc;
 
-        #[ifdef(LOG_KONATA)]
-        core_if.trace_id = issue_fifo_rdata.trace_id;
-
-        #[ifdef(LOG_KONATA)]
-        core_if.trace_id_next = trace_id_next;
-
-        #[ifdef(LOG_KONATA)]
-        core_if.trace_fetch_valid = issue_fire;
-
-        #[ifdef(LOG_KONATA)]
-        core_if.trace_fetch_id = issue_fifo_wdata.trace_id;
-
-        #[ifdef(LOG_KONATA)]
-        core_if.trace_fetch_addr = issue_fifo_wdata.addr;
-
-        #[ifdef(LOG_KONATA)]
-        core_if.trace_fetch_bits = issue_fifo_wdata.bits;
     }
 
     /*--------- fetch logic ----------*/
@@ -271,6 +236,27 @@ module inst_fetcher (
                         fetch_pc           += 8;
                     }
                 }
+            }
+        }
+    }
+
+    #[ifdef(LOG_PIPELINE)]
+    {
+        var trace_cycle: u64;
+        always_ff {
+            if_reset {
+                trace_cycle = 0;
+            } else {
+                if mem_if.valid && mem_if.ready {
+                    $display("K\t%0d\tQ\t%h", trace_cycle, mem_if.addr);
+                }
+                if fetch_fifo_wvalid {
+                    $display("K\t%0d\tP\t%h\t%h", trace_cycle, fetch_fifo_wdata.addr, fetch_fifo_wdata.bits);
+                }
+                if issue_fire {
+                    $display("K\t%0d\tF\t%h\t%h", trace_cycle, issue_fifo_wdata.addr, issue_fifo_wdata.bits);
+                }
+                trace_cycle += 1;
             }
         }
     }
