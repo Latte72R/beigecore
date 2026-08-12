@@ -123,6 +123,10 @@ module core (
     var ids_ctrl      : InstCtrl;
 
     var bimodal_pred_taken: logic;
+    var bimodal_pred_valid: logic;
+
+    let ids_btfnt_taken      : logic = ids_imm[msb]; // 負のoffsetならbackward
+    let ids_branch_pred_taken: logic = if bimodal_pred_valid ? bimodal_pred_taken : ids_btfnt_taken;
 
     var btb_hit   : logic;
     var btb_target: Addr ;
@@ -131,7 +135,7 @@ module core (
     let ids_is_jalr: logic = ids_ctrl.is_jump && ids_ctrl.itype == InstType::I;
 
     let ids_pred_taken: logic = ids_inst_valid
-        && (ids_is_jal || (ids_is_jalr && btb_hit) || (inst_is_br(ids_ctrl) && bimodal_pred_taken));
+        && (ids_is_jal || (ids_is_jalr && btb_hit) || (inst_is_br(ids_ctrl) && ids_branch_pred_taken));
 
     let ids_pc: Addr = i_membus.raddr;
     always_comb {
@@ -798,6 +802,7 @@ module core (
 
         predict_pc   : ids_pc            ,
         predict_taken: bimodal_pred_taken,
+        predict_valid: bimodal_pred_valid,
 
         update_valid: rob_allocate_fire && inst_is_br(exs_ctrl),
         update_pc   : exs_pc                                   ,
