@@ -501,9 +501,11 @@ module core (
         membus: d_membus                                          ,
     );
 
-    var csru_rdata      : UIntX;
-    var csru_raise_trap : logic;
-    var csru_trap_vector: Addr ;
+    var csru_rdata      : UIntX ;
+    var csru_raise_trap : logic ;
+    var csru_trap_vector: Addr  ;
+    var csru_trap_return: logic ;
+    var minstret        : UInt64;
 
     inst csru: csrunit (
         clk                                        ,
@@ -520,6 +522,8 @@ module core (
         rdata      : csru_rdata                    ,
         raise_trap : csru_raise_trap               ,
         trap_vector: csru_trap_vector              ,
+        trap_return: csru_trap_return              ,
+        minstret                                   ,
         led                                        ,
     );
 
@@ -543,7 +547,7 @@ module core (
         };
 
         rob_complete_data.expt       = memq_rdata.expt;
-        rob_complete_data.raise_trap = csru_raise_trap;
+        rob_complete_data.raise_trap = csru_raise_trap && !csru_trap_return;
 
         #[ifdef(LOG_KONATA)]
         rob_complete_data.trace_id = memq_rdata.trace_id;
@@ -564,6 +568,16 @@ module core (
 
     #[ifdef(LOG_KONATA)]
     let wbs_trace_id: logic<64> = rob_commit_data.trace_id;
+
+    always_ff {
+        if_reset {
+            minstret = 0;
+        } else {
+            if rob_commit_valid && rob_commit_ready && !rob_commit_data.raise_trap {
+                minstret += 1;
+            }
+        }
+    }
 
     always_ff {
         // ROB先頭が完成済み & コミットが成立 & レジスタ書込み命令 & x0ではない & trapではない
