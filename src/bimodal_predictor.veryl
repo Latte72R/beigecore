@@ -13,7 +13,7 @@ module bimodal_predictor (
     update_pc   : input Addr ,
     update_taken: input logic,
 ) {
-    const INDEX_WIDTH: u32 = 8;
+    const INDEX_WIDTH: u32 = 12;
     const ENTRY_COUNT: u32 = 2 ** INDEX_WIDTH;
 
     type Counter = logic<2>;
