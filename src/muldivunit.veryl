@@ -331,7 +331,7 @@ module divunit #(
     quotient : output logic<WIDTH>,
     remainder: output logic<WIDTH>,
 ) {
-    const STEP: u32 = 4;
+    const STEP: u32 = 2;
 
     enum State {
         Idle,
