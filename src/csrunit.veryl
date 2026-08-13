@@ -385,6 +385,7 @@ module csrunit (
                             mstatus[8] = 0;
                         }
                     }
+                    mode = trap_mode_next;
                 } else {
                     // CSRの書き込み
                     if is_wsc {

@@ -152,9 +152,10 @@ module inst_fetcher (
                     }
                 }
             } else {
-                fetch_fifo_rready     = issue_fifo_wready && !rvcc_is_rvc && offset == 4;
-                issue_fifo_wvalid     = 1;
-                issue_fifo_wdata.addr = {raddr[msb:3], offset};
+                fetch_fifo_rready       = issue_fifo_wready && !rvcc_is_rvc && offset == 4;
+                issue_fifo_wvalid       = 1;
+                issue_fifo_wdata.addr   = {raddr[msb:3], offset};
+                issue_fifo_wdata.is_rvc = rvcc_is_rvc;
                 if rvcc_is_rvc {
                     issue_fifo_wdata.bits = rvcc_inst32;
                 } else {
@@ -166,7 +167,6 @@ module inst_fetcher (
                     };
                 }
             }
-            issue_fifo_wdata.is_rvc = rvcc_is_rvc;
         }
     }
 
