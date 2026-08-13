@@ -13,6 +13,7 @@ module csrunit (
     csr_addr   : input   logic           <12>,
     rs1_addr   : input   logic           <5> ,
     rs1_data   : input   UIntX               ,
+    can_intr   : input   logic               ,
     rdata      : output  UIntX               ,
     raise_trap : output  logic               ,
     trap_vector: output  Addr                ,
@@ -35,11 +36,28 @@ module csrunit (
     let mhartid : UIntX  = 0;
     var mstatus : UIntX ;
     var mtvec   : UIntX ;
+    var mie     : UIntX ;
     var mcycle  : UInt64;
     var mscratch: UIntX ;
     var mepc    : UIntX ;
     var mcause  : UIntX ;
     var mtval   : UIntX ;
+
+    let mip: UIntX = {
+        1'b0 repeat XLEN - 12, // 0, LCOFIP
+        1'b0, // MEIP
+        1'b0, // 0
+        1'b0, // SEIP
+        1'b0, // 0
+        1'b0, // MTIP
+        1'b0, // 0
+        1'b0, // STIP
+        1'b0, // 0
+        aclint.msip, // MSIP
+        1'b0, // 0
+        1'b0, // SSIP
+        1'b0, // 0
+    };
 
     // Exception
     let raise_expt: logic = valid && (expt_info.valid || expt_write_readonly_csr);
@@ -54,21 +72,41 @@ module csrunit (
         default                                    : 0
     };
 
+    // mstatus bits
+    let mstatus_mpie: logic = mstatus[7];
+    let mstatus_mie : logic = mstatus[3];
+
+    // Interrupt
+    let raise_interrupt : logic = valid && can_intr && mstatus_mie && (mip & mie) != 0;
+    let interrupt_cause : UIntX = CsrCause::MACHINE_SOFTWARE_INTERRUPT;
+    let interrupt_vector: Addr  = mtvec;
+
+
     // Trap Return
-    assign trap_return = valid && is_mret && !raise_expt;
+    assign trap_return = valid && is_mret && !raise_expt && !raise_interrupt;
 
     // Trap
-    assign raise_trap = raise_expt || trap_return;
-    let trap_cause: UIntX = expt_cause;
-    assign trap_vector = if raise_expt ? mtvec : mepc;
+    assign raise_trap = raise_expt || raise_interrupt || trap_return;
+    let trap_cause: UIntX = switch {
+        raise_expt     : expt_cause,
+        raise_interrupt: interrupt_cause,
+        default        : 0,
+    };
+    assign trap_vector = switch {
+        raise_expt     : mtvec,
+        raise_interrupt: interrupt_vector,
+        trap_return    : mepc,
+        default        : 0,
+    };
 
     // wmasks
-    const MSTATUS_WMASK : UIntX = 'h0000_0000_0000_0000 as UIntX;
+    const MSTATUS_WMASK : UIntX = 'h0000_0000_0000_0088 as UIntX;
     const MTVEC_WMASK   : UIntX = 'hffff_ffff_ffff_fffc;
     const MSCRATCH_WMASK: UIntX = 'hffff_ffff_ffff_ffff;
     const MEPC_WMASK    : UIntX = 'hffff_ffff_ffff_fffe;
     const MCAUSE_WMASK  : UIntX = 'hffff_ffff_ffff_ffff;
     const MTVAL_WMASK   : UIntX = 'hffff_ffff_ffff_ffff;
+    const MIE_WMASK     : UIntX = 'h0000_0000_0000_0088 as UIntX;
     const LED_WMASK     : UIntX = 'hffff_ffff_ffff_ffff;
 
     var mode: PrivMode;
@@ -84,6 +122,8 @@ module csrunit (
             CsrAddr::MHARTID : mhartid,
             CsrAddr::MSTATUS : mstatus,
             CsrAddr::MTVEC   : mtvec,
+            CsrAddr::MIP     : mip,
+            CsrAddr::MIE     : mie,
             CsrAddr::MCYCLE  : mcycle,
             CsrAddr::MINSTRET: minstret,
             CsrAddr::MSCRATCH: mscratch,
@@ -97,6 +137,7 @@ module csrunit (
         wmask = case csr_addr {
             CsrAddr::MSTATUS : MSTATUS_WMASK,
             CsrAddr::MTVEC   : MTVEC_WMASK,
+            CsrAddr::MIE     : MIE_WMASK,
             CsrAddr::MSCRATCH: MSCRATCH_WMASK,
             CsrAddr::MEPC    : MEPC_WMASK,
             CsrAddr::MCAUSE  : MCAUSE_WMASK,
@@ -118,6 +159,7 @@ module csrunit (
             mode     = PrivMode::M;
             mstatus  = 0;
             mtvec    = 0;
+            mie      = 0;
             mcycle   = 0;
             mscratch = 0;
             mepc     = 0;
@@ -127,12 +169,21 @@ module csrunit (
         } else {
             mcycle += 1;
             if valid {
-                if raise_trap {
+                if raise_trap || raise_interrupt {
                     // トラップが発生したときの処理
-                    if raise_expt {
+                    if raise_expt || raise_interrupt {
                         mepc   = pc;
                         mcause = trap_cause;
-                        mtval  = expt_value;
+                        mtval  = if raise_expt ? expt_value : 0;
+                        // save mstatus.mie to mstatus.mpie
+                        // and set mstatus.mie = 0
+                        mstatus[7] = mstatus[3];
+                        mstatus[3] = 0;
+                    } else if trap_return {
+                        // set mstatus.mie = mstatus.mpie
+                        //     mstatus.mpie = 1
+                        mstatus[3] = mstatus[7];
+                        mstatus[7] = 1;
                     }
                 } else {
                     // CSRの書き込み
@@ -140,6 +191,7 @@ module csrunit (
                         case csr_addr {
                             CsrAddr::MSTATUS : mstatus  = wdata;
                             CsrAddr::MTVEC   : mtvec    = wdata;
+                            CsrAddr::MIE     : mie      = wdata;
                             CsrAddr::MSCRATCH: mscratch = wdata;
                             CsrAddr::MEPC    : mepc     = wdata;
                             CsrAddr::MCAUSE  : mcause   = wdata;

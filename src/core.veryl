@@ -355,7 +355,11 @@ module core (
     }
 
     // 未解決の直列化命令がROB/MEM内にある
-    var serial_pending: logic;
+    var serial_pending  : logic;
+    var csru_rdata      : UIntX;
+    var csru_raise_trap : logic;
+    var csru_trap_vector: Addr ;
+    var csru_trap_return: logic;
 
     // 命令が進む経路に空きがあるか
     let exs_route_ready: logic = !exs_needs_mem || memq_wready;
@@ -466,6 +470,9 @@ module core (
     always_ff {
         if_reset {
             serial_pending = 0;
+        } else if csru_raise_trap {
+            // トラップ時は後続の直列化命令もフラッシュされる。
+            serial_pending = 0;
         } else {
             if serial_complete {
                 serial_pending = 0;
@@ -479,10 +486,27 @@ module core (
     var memu_stall: logic;
     let memu_addr : Addr  = if mems_ctrl.is_amo ? memq_rdata.rs1_data : memq_rdata.alu_result;
 
+    var minstret: UInt64;
+
+    // ROB先頭命令の最初のサイクルでだけ受け付ける
+    var mems_intr_checked: logic;
+    let mems_can_intr    : logic = mems_valid && mems_at_rob_head && !mems_intr_checked;
+
+    always_ff {
+        if_reset {
+            mems_intr_checked = 0;
+        } else if !mems_valid || memq_rready {
+            // 空、または現在の命令をMEMから取り出した。
+            mems_intr_checked = 0;
+        } else if mems_at_rob_head {
+            mems_intr_checked = 1;
+        }
+    }
+
     inst memu: memunit (
         clk                                                       ,
         rst                                                       ,
-        valid : mems_valid && mems_can_execute && !mems_expt.valid,
+        valid : mems_valid && mems_can_execute && !csru_raise_trap,
         ctrl  : mems_ctrl                                         ,
         addr  : memu_addr                                         ,
         rs2   : memq_rdata.rs2_data                               ,
@@ -490,12 +514,6 @@ module core (
         stall : memu_stall                                        ,
         membus: d_membus                                          ,
     );
-
-    var csru_rdata      : UIntX ;
-    var csru_raise_trap : logic ;
-    var csru_trap_vector: Addr  ;
-    var csru_trap_return: logic ;
-    var minstret        : UInt64;
 
     inst csru: csrunit (
         clk                                        ,
@@ -509,6 +527,7 @@ module core (
         csr_addr   : mems_inst_bits[31:20]         ,
         rs1_addr   : memq_rdata.rs1_addr           ,
         rs1_data   : memq_rdata.rs1_data           ,
+        can_intr   : mems_can_intr                 ,
         rdata      : csru_rdata                    ,
         raise_trap : csru_raise_trap               ,
         trap_vector: csru_trap_vector              ,
@@ -586,6 +605,12 @@ module core (
 
     always_ff {
         if_reset {
+            for i in 0..32 {
+                producer_valid[i] = 0;
+                producer_tag[i]   = 0;
+            }
+        } else if csru_raise_trap {
+            // ROBと一緒に、フラッシュした命令の依存情報も破棄する。
             for i in 0..32 {
                 producer_valid[i] = 0;
                 producer_tag[i]   = 0;
@@ -860,9 +885,10 @@ module core (
         DATA_TYPE: rob_entry_type,
         WIDTH    : ROB_WIDTH     ,
     ) (
-        clk     ,
-        rst     ,
-        flush: 0,
+        clk  ,
+        rst  ,
+        // トラップはROB先頭でのみ受理するため、ここで全破棄できる。
+        flush: csru_raise_trap,
 
         allocate_valid: rob_allocate_valid,
         allocate_ready: rob_allocate_ready,

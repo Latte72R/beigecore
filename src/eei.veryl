@@ -108,9 +108,14 @@ package eei {
         MEPC = 12'h341,
         MCAUSE = 12'h342,
         MTVAL = 12'h343,
+        MIP = 12'h344,
         // Machine Counter/Timers
         MCYCLE = 12'hB00,
         MINSTRET = 12'hB02,
+        // Unprivileged Counter/Timers
+        CYCLE = 12'hC00,
+        TIME = 12'hC01,
+        INSTRET = 12'hC02,
         // Custom
         LED = 12'h800,
     }
