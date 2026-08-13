@@ -4,6 +4,7 @@
 
 #include "Vcore_top.h"
 #include <cstdio>
+#include <deque>
 #include <fcntl.h>
 #include <filesystem>
 #include <fstream>
@@ -85,10 +86,8 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-#ifdef ENABLE_DEBUG_INPUT
   std::setvbuf(stdout, nullptr, _IONBF, 0);
   set_nonblocking();
-#endif
 
   // メモリの初期値を格納しているファイル名
   std::string rom_file_path = argv[1];
@@ -130,6 +129,17 @@ int main(int argc, char **argv) {
   Vcore_top *dut = new Vcore_top();
   dut->MMAP_DBG_ADDR = DBG_ADDR;
 
+  dut->uart_rx_valid = 0;
+  dut->uart_rx_data = 0;
+  dut->uart_tx_ready = 1;
+
+  std::deque<unsigned char> uart_rx_queue;
+
+  if (const char *input = getenv("UART_RX")) {
+    while (*input != '\0')
+      uart_rx_queue.push_back(static_cast<unsigned char>(*input++));
+  }
+
 #ifdef TEST_MODE
   fs::path dump_path = ram_file_path;
   dump_path.replace_extension("");
@@ -168,8 +178,38 @@ int main(int argc, char **argv) {
   unsigned long long executed_cycles = 0;
   for (long long i = 0;
        !Verilated::gotFinish() && (cycles == 0 || i / 2 < cycles); i++) {
+    const bool rising_edge = dut->clk == 0;
+
+    if (rising_edge) {
+      unsigned char input = 0;
+      while (read(STDIN_FILENO, &input, 1) == 1)
+        uart_rx_queue.push_back(input);
+
+      dut->uart_rx_valid = !uart_rx_queue.empty();
+      dut->uart_rx_data = uart_rx_queue.empty() ? 0 : uart_rx_queue.front();
+
+      dut->eval();
+    }
+
+    const bool uart_rx_fire =
+        rising_edge && dut->uart_rx_valid && dut->uart_rx_ready;
+    const bool uart_tx_fire =
+        rising_edge && dut->uart_tx_valid && dut->uart_tx_ready;
+
+    // rising edge後にtx_dataが更新される場合に備えて先に保存
+    const unsigned char uart_tx_byte = dut->uart_tx_data;
+
     dut->clk = !dut->clk;
     dut->eval();
+
+    if (uart_rx_fire)
+      uart_rx_queue.pop_front();
+
+    if (uart_tx_fire) {
+      std::fputc(uart_tx_byte, stdout);
+      std::fflush(stdout);
+    }
+
     executed_cycles = i / 2;
   }
   dut->final();
