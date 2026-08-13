@@ -305,6 +305,8 @@ module csrunit (
             } & SSTATUS_WMASK | (mstatus & ~SSTATUS_WMASK);
     }
 
+    let setssip: UIntX = {1'b0 repeat XLEN - 2, aclint.setssip, 1'b0};
+
     always_ff {
         if_reset {
             mode       = PrivMode::M;
@@ -329,7 +331,8 @@ module csrunit (
             sie        = 0;
             led        = 0;
         } else {
-            mcycle += 1;
+            mcycle  += 1;
+            mip_reg |= setssip;
             if valid {
                 if raise_trap || raise_interrupt {
                     // トラップが発生したときの処理
@@ -391,7 +394,7 @@ module csrunit (
                                 CsrAddr::MTVEC   : mtvec    = wdata;
                                 CsrAddr::MEDELEG : medeleg  = wdata;
                                 CsrAddr::MIDELEG : mideleg  = wdata;
-                                CsrAddr::MIP     : mip_reg  = wdata & MIP_WMASK;
+                                CsrAddr::MIP     : mip_reg  = (wdata & MIP_WMASK) | setssip;
                                 CsrAddr::MIE     : mie      = wdata;
                                 CsrAddr::MSCRATCH: mscratch = wdata;
                                 CsrAddr::MEPC    : mepc     = wdata;

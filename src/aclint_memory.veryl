@@ -21,8 +21,16 @@ module aclint_memory (
     var mtimecmp0: UInt64;
 
     always_comb {
-        aclint.msip = msip0;
-        aclint.mtip = mtime >= mtimecmp0;
+        aclint.msip  = msip0;
+        aclint.mtip  = mtime >= mtimecmp0;
+        aclint.mtime = mtime;
+    }
+
+    always_comb {
+        aclint.setssip = 0;
+        if membus.valid && membus.wen && membus.addr == MMAP_ACLINT_SETSSIP {
+            aclint.setssip = membus.wdata[0];
+        }
     }
 
     assign membus.ready = 1;
