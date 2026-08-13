@@ -24,7 +24,7 @@ KONATA_CYCLES ?= 1000
 KONATA_LOG ?= results/konata.log
 KONATA_RAW ?= results/konata.raw
 
-SYNTH_TOP ?= core
+SYNTH_TOP ?= top
 TIMING_PATHS ?= 10
 
 RV_TEST_DIR ?= test/share/riscv-tests

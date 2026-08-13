@@ -92,23 +92,19 @@ module core (
     var control_hazard        : logic;
     var control_hazard_pc_next: Addr ;
 
-    var exs_recovery_pc          : Addr ;
-    var exs_is_jalr              : logic;
-    var exs_actual_target        : Addr ;
-    var exs_prediction_mispredict: logic;
+    var exs_is_jalr      : logic;
+    var exs_actual_target: Addr ;
 
     var prediction_redirect: logic;
     var ids_imm            : UIntX;
     var ids_pred_target    : Addr ;
 
-    let frontend_redirect: logic = control_hazard || exs_prediction_mispredict || prediction_redirect;
+    let frontend_redirect: logic = control_hazard || prediction_redirect;
     always_comb {
         i_membus.is_redirect = frontend_redirect;
 
         if control_hazard {
             i_membus.next_pc = control_hazard_pc_next;
-        } else if exs_prediction_mispredict {
-            i_membus.next_pc = exs_recovery_pc;
         } else {
             i_membus.next_pc = ids_pred_target;
         }
@@ -119,7 +115,7 @@ module core (
     let ids_valid     = i_membus.rvalid;
     let ids_inst_bits = i_membus.rdata;
 
-    let ids_fire      : logic    = !control_hazard && !exs_prediction_mispredict && i_membus.rvalid && i_membus.rready;
+    let ids_fire      : logic    = !control_hazard && i_membus.rvalid && i_membus.rready;
     var ids_inst_valid: logic   ;
     var ids_ctrl      : InstCtrl;
 
@@ -240,6 +236,7 @@ module core (
     var exs_op1       : UIntX;
     var exs_op2       : UIntX;
     var exs_alu_result: UIntX;
+    let exs_add_result: UIntX = exs_op1 + exs_op2;
 
     always_comb {
         case exs_ctrl.itype {
@@ -366,8 +363,9 @@ module core (
     // EX段の命令がROBへ実際に登録された
     let rob_allocate_fire: logic = rob_allocate_valid && rob_allocate_ready;
     // ROBに登録された命令が直列化命令（後続命令を確定できない命令）かどうか
-    let exs_redirect      : logic = exs_ctrl.is_jump || (inst_is_br(exs_ctrl) && exs_brunit_take);
-    let exs_is_serializing: logic = exs_redirect || exs_ctrl.is_csr || memq_wdata.expt.valid;
+    // 分岐予測の確認はMEM段で行うため，解決前の若い命令をROBへ登録しない
+    let exs_is_serializing: logic = exs_ctrl.is_jump || inst_is_br(exs_ctrl) || exs_ctrl.is_csr
+        || memq_wdata.expt.valid;
     // ROBに登録された命令が直列化命令の場合，次の命令のROB登録を待つ
     let serial_allocate: logic = rob_allocate_fire && exs_is_serializing;
 
@@ -376,20 +374,8 @@ module core (
     always_comb {
         // EX -> MEM
         // 予測の確認
-        exs_is_jalr               = exs_ctrl.is_jump && exs_ctrl.itype == InstType::I;
-        exs_actual_target         = exs_alu_result & ~1;
-        let exs_jalr_mispredict      : logic = rob_allocate_fire && exs_is_jalr && !exq_rdata.pred_taken;
-        let exs_branch_mispredict    : logic = rob_allocate_fire && inst_is_br(exs_ctrl)
-            && (exq_rdata.pred_taken != exs_brunit_take);
-        exs_prediction_mispredict = exs_branch_mispredict || exs_jalr_mispredict;
-
-        if exs_is_jalr {
-            exs_recovery_pc = exs_actual_target;
-        } else if exs_brunit_take {
-            exs_recovery_pc = exs_pc + exs_imm;
-        } else {
-            exs_recovery_pc = exs_pc + (if exs_ctrl.is_rvc ? 2 : 4);
-        }
+        exs_is_jalr       = exs_ctrl.is_jump && exs_ctrl.itype == InstType::I;
+        exs_actual_target = exs_add_result & ~1;
 
         // ROBだけallocationされたり MEM FIFOだけ書き込まれたりするのを防ぐ
         rob_allocate_valid = exq_rvalid && exs_route_ready && !exs_stall && !serial_pending && !control_hazard;
@@ -401,12 +387,14 @@ module core (
         memq_wdata.ctrl = exq_rdata.ctrl;
         memq_wdata.imm  = exq_rdata.imm;
 
-        memq_wdata.rs1_addr   = exs_rs1_addr;
-        memq_wdata.rs1_data   = exs_rs1_data;
-        memq_wdata.rs2_data   = exs_rs2_data;
-        memq_wdata.alu_result = if exs_ctrl.is_muldiv ? exs_muldiv_result : exs_alu_result;
+        memq_wdata.rs1_addr = exs_rs1_addr;
+        memq_wdata.rs1_data = exs_rs1_data;
+        memq_wdata.rs2_data = exs_rs2_data;
+        // MEMへ進む命令で必要なALU結果はロード/ストアのアドレスだけ
+        // 汎用ALUのシフタ等をMEM FIFOの入力へ接続しない
+        memq_wdata.alu_result = exs_add_result;
         memq_wdata.br_taken   = exs_ctrl.is_jump || inst_is_br(exs_ctrl) && exs_brunit_take;
-        memq_wdata.jump_addr  = if inst_is_br(exs_ctrl) ? exs_pc + exs_imm : exs_alu_result & ~1;
+        memq_wdata.jump_addr  = if inst_is_br(exs_ctrl) ? exs_pc + exs_imm : exs_add_result & ~1;
         memq_wdata.rob_tag    = rob_allocate_tag;
 
         memq_wdata.pred_taken  = exq_rdata.pred_taken;
@@ -415,7 +403,7 @@ module core (
         // exception
         let instruction_address_misaligned: logic = IALIGN == 32 && memq_wdata.br_taken && memq_wdata.jump_addr[1:0]
             != 2'b00;
-        let memaddr                       : Addr  = if exs_ctrl.is_amo ? exs_rs1_data : exs_alu_result;
+        let memaddr                       : Addr  = if exs_ctrl.is_amo ? exs_rs1_data : exs_add_result;
         let loadstore_address_misaligned  : logic = inst_is_memop(exs_ctrl)
             && case exs_ctrl.funct3[1:0] {
                 2'b00  : 1'b0, // B
@@ -451,15 +439,23 @@ module core (
     let mems_expt     : ExceptionInfo    = memq_rdata.expt;
     let mems_rd_addr  : logic        <5> = mems_inst_bits[11:7];
 
-    let mems_is_jalr               : logic = mems_ctrl.is_jump && mems_ctrl.itype == InstType::I;
-    let mems_jalr_target_mispredict: logic = mems_valid && mems_is_jalr && memq_rdata.pred_taken
-        && memq_rdata.pred_target != memq_rdata.jump_addr;
+    let mems_is_jalr              : logic = mems_ctrl.is_jump && mems_ctrl.itype == InstType::I;
+    let mems_is_branch            : logic = inst_is_br(mems_ctrl);
+    let mems_branch_mispredict    : logic = mems_is_branch && memq_rdata.pred_taken != memq_rdata.br_taken;
+    let mems_jalr_mispredict      : logic = mems_is_jalr
+        && (!memq_rdata.pred_taken || memq_rdata.pred_target != memq_rdata.jump_addr);
+    let mems_prediction_mispredict: logic = mems_valid && (mems_branch_mispredict || mems_jalr_mispredict);
+    let mems_recovery_pc          : Addr  = if memq_rdata.br_taken ?
+        memq_rdata.jump_addr
+    :
+        mems_pc + (if mems_ctrl.is_rvc ? 2 : 4)
+    ;
 
     let mems_is_store   : logic = inst_is_store(mems_ctrl);
     let mems_at_rob_head: logic = rob_head_valid && rob_head_tag == memq_rdata.rob_tag;
 
     // 命令が直列化命令（後続命令を確定できない命令）かどうか
-    let mems_is_serializing: logic = memq_rdata.br_taken || mems_ctrl.is_csr || mems_expt.valid;
+    let mems_is_serializing: logic = mems_ctrl.is_jump || inst_is_br(mems_ctrl) || mems_ctrl.is_csr || mems_expt.valid;
 
     // Storeまたは直列化命令ならROB先頭の場合だけ実行してよい
     let mems_requires_head: logic = mems_is_store || mems_ctrl.is_amo || mems_ctrl.is_csr || mems_expt.valid;
@@ -559,8 +555,8 @@ module core (
     }
 
     always_comb {
-        control_hazard         = mems_valid && mems_can_execute && (csru_raise_trap || mems_jalr_target_mispredict);
-        control_hazard_pc_next = if csru_raise_trap ? csru_trap_vector : memq_rdata.jump_addr;
+        control_hazard         = mems_valid && mems_can_execute && (csru_raise_trap || mems_prediction_mispredict);
+        control_hazard_pc_next = if csru_raise_trap ? csru_trap_vector : mems_recovery_pc;
     }
 
     ///////////////////////////////// WB Stage /////////////////////////////////
@@ -607,7 +603,7 @@ module core (
                 producer_tag[i]   = 0;
             }
         } else if csru_raise_trap {
-            // ROBと一緒に、フラッシュした命令の依存情報も破棄する。
+            // ROBと一緒に、フラッシュした命令の依存情報も破棄する
             for i in 0..32 {
                 producer_valid[i] = 0;
                 producer_tag[i]   = 0;
@@ -808,8 +804,6 @@ module core (
                         mems_inst_bits,
                         control_hazard_pc_next,
                     );
-                } else if exs_prediction_mispredict {
-                    $display("K\t%0d\tR\tBR\t%h\t%h\t%h", trace_cycle, exs_pc, exs_inst_bits, exs_recovery_pc);
                 } else if prediction_redirect {
                     $display("K\t%0d\tR\tPRED\t%h\t%h\t%h", trace_cycle, ids_pc, ids_inst_bits, ids_pred_target);
                 }
@@ -852,15 +846,15 @@ module core (
         DATA_TYPE: exq_type,
         WIDTH    : 2       ,
     ) (
-        clk                                                ,
-        rst                                                ,
-        flush : control_hazard || exs_prediction_mispredict,
-        wready: exq_wready                                 ,
-        wvalid: exq_wvalid                                 ,
-        wdata : exq_wdata                                  ,
-        rready: exq_rready                                 ,
-        rvalid: exq_rvalid                                 ,
-        rdata : exq_rdata                                  ,
+        clk                   ,
+        rst                   ,
+        flush : control_hazard,
+        wready: exq_wready    ,
+        wvalid: exq_wvalid    ,
+        wdata : exq_wdata     ,
+        rready: exq_rready    ,
+        rvalid: exq_rvalid    ,
+        rdata : exq_rdata     ,
     );
 
     inst ex_mem_fifo: fifo #(
@@ -884,7 +878,7 @@ module core (
     ) (
         clk  ,
         rst  ,
-        // トラップはROB先頭でのみ受理するため、ここで全破棄できる。
+        // トラップはROB先頭でのみ受理するため、ここで全破棄できる
         flush: csru_raise_trap,
 
         allocate_valid: rob_allocate_valid,

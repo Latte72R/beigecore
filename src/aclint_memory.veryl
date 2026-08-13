@@ -6,6 +6,16 @@ module aclint_memory (
     membus: modport Membus::slave    ,
     aclint: modport aclint_if::master,
 ) {
+    function expand_wmask (
+        wmask: input logic<MEMBUS_DATA_WIDTH / 8>,
+    ) -> logic<MEMBUS_DATA_WIDTH> {
+        var result: logic<MEMBUS_DATA_WIDTH>;
+        for i in 0..MEMBUS_DATA_WIDTH {
+            result[i] = wmask[i / 8];
+        }
+        return result;
+    }
+
     var msip0    : logic ;
     var mtime    : UInt64;
     var mtimecmp0: UInt64;
@@ -29,7 +39,7 @@ module aclint_memory (
             if membus.valid {
                 let addr: Addr = {membus.addr[XLEN - 1:3], 3'b0};
                 if membus.wen {
-                    let M: logic<MEMBUS_DATA_WIDTH> = membus.wmask_expand();
+                    let M: logic<MEMBUS_DATA_WIDTH> = expand_wmask(membus.wmask);
                     let D: logic<MEMBUS_DATA_WIDTH> = membus.wdata & M;
                     case addr {
                         MMAP_ACLINT_MSIP    : msip0     = D[0] | msip0 & ~M[0];
