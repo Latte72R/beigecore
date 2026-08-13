@@ -9,11 +9,17 @@ module top #(
     #[ifdef(TEST_MODE)]
     test_success: output bit,
     #[ifdef(TEST_MODE)]
-    test_tohost_addr: input  Addr ,
-    MMAP_DBG_ADDR   : input  Addr ,
-    clk             : input  clock,
-    rst             : input  reset,
-    led             : output UIntX,
+    test_tohost_addr: input  Addr    ,
+    MMAP_DBG_ADDR   : input  Addr    ,
+    clk             : input  clock   ,
+    rst             : input  reset   ,
+    led             : output UIntX   ,
+    uart_rx_valid   : input  logic   ,
+    uart_rx_ready   : output logic   ,
+    uart_rx_data    : input  logic<8>,
+    uart_tx_valid   : output logic   ,
+    uart_tx_ready   : input  logic   ,
+    uart_tx_data    : output logic<8>,
 ) {
     // アドレスをデータ単位でのアドレスに変換する
     function addr_to_memaddr::<DATA_WIDTH: u32, ADDR_WIDTH: u32> (
@@ -36,6 +42,25 @@ module top #(
     inst d_membus     : Membus;
 
     inst aclint_core_bus: aclint_if;
+
+    inst uart_membus : Membus;
+    inst uart_backend: uart_if;
+
+    always_comb {
+        uart_backend.rx_valid = uart_rx_valid;
+        uart_rx_ready         = uart_backend.rx_ready;
+        uart_backend.rx_data  = uart_rx_data;
+        uart_tx_valid         = uart_backend.tx_valid;
+        uart_backend.tx_ready = uart_tx_ready;
+        uart_tx_data          = uart_backend.tx_data;
+    }
+
+    inst uart: uart16550 (
+        clk                 ,
+        rst                 ,
+        membus: uart_membus ,
+        uart  : uart_backend,
+    );
 
     var memarb_last_i: logic;
 
@@ -138,6 +163,7 @@ module top #(
         rom_membus   : mmio_rom_membus,
         dbg_membus                    ,
         aclint_membus                 ,
+        uart_membus                   ,
     );
 
     inst amou: amounit (

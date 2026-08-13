@@ -1,0 +1,21 @@
+interface uart_if {
+    var rx_valid: logic   ;
+    var rx_ready: logic   ;
+    var rx_data : logic<8>;
+    var tx_valid: logic   ;
+    var tx_ready: logic   ;
+    var tx_data : logic<8>;
+
+    modport device {
+        rx_valid: input ,
+        rx_ready: output,
+        rx_data : input ,
+        tx_valid: output,
+        tx_ready: input ,
+        tx_data : output,
+    }
+
+    modport backend {
+        ..converse(device)
+    }
+}

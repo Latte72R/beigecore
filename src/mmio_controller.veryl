@@ -9,6 +9,7 @@ module mmio_controller (
     rom_membus   : modport Membus::master,
     dbg_membus   : modport Membus::master,
     aclint_membus: modport Membus::master,
+    uart_membus  : modport Membus::master,
 ) {
 
     enum Device {
@@ -17,6 +18,7 @@ module mmio_controller (
         ROM,
         DEBUG,
         ACLINT,
+        UART,
     }
 
     // MMIO要求のうち、保存・転送が必要な部分
@@ -47,6 +49,7 @@ module mmio_controller (
         rom_membus    <> 0;
         dbg_membus    <> 0;
         aclint_membus <> 0;
+        uart_membus   <> 0;
     }
 
     // アドレスからデバイスを取得する
@@ -64,6 +67,9 @@ module mmio_controller (
         }
         if MMAP_ACLINT_BEGIN <= addr && addr <= MMAP_ACLINT_END {
             return Device::ACLINT;
+        }
+        if MMAP_UART_BEGIN <= addr && addr <= MMAP_UART_END {
+            return Device::UART;
         }
         return Device::UNKNOWN;
     }
@@ -101,6 +107,13 @@ module mmio_controller (
                 dbg_membus.wdata = req.wdata;
                 dbg_membus.wmask = req.wmask;
             }
+            Device::UART: {
+                uart_membus.valid = req.valid;
+                uart_membus.addr  = req.addr - MMAP_UART_BEGIN;
+                uart_membus.wen   = req.wen;
+                uart_membus.wdata = req.wdata;
+                uart_membus.wmask = req.wmask;
+            }
             default: {}
         }
     }
@@ -130,6 +143,10 @@ module mmio_controller (
                 req_core.rvalid = aclint_membus.rvalid;
                 req_core.rdata  = aclint_membus.rdata;
             }
+            Device::UART: {
+                req_core.rvalid = uart_membus.rvalid;
+                req_core.rdata  = uart_membus.rdata;
+            }
             default: {}
         }
     }
@@ -143,6 +160,7 @@ module mmio_controller (
             Device::ROM   : return rom_membus.ready;
             Device::DEBUG : return dbg_membus.ready;
             Device::ACLINT: return aclint_membus.ready;
+            Device::UART  : return uart_membus.ready;
             default       : {}
         }
 
@@ -158,6 +176,7 @@ module mmio_controller (
             Device::ROM   : return rom_membus.rvalid;
             Device::DEBUG : return dbg_membus.rvalid;
             Device::ACLINT: return aclint_membus.rvalid;
+            Device::UART  : return uart_membus.rvalid;
             default       : {}
         }
 

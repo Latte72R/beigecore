@@ -41,6 +41,10 @@ package eei {
     const MMAP_ACLINT_SETSSIP : Addr = 'h8000 as Addr;
     const MMAP_ACLINT_END     : Addr = MMAP_ACLINT_BEGIN + 'hbfff as Addr;
 
+    // 16550-compatible UART
+    const MMAP_UART_BEGIN: Addr = 'h1000_0000 as Addr;
+    const MMAP_UART_END  : Addr = MMAP_UART_BEGIN + 'hfff as Addr;
+
     // pc on reset
     const INITIAL_PC: Addr = MMAP_ROM_BEGIN;
 

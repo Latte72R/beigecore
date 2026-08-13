@@ -1,0 +1,110 @@
+import eei::*;
+
+module uart16550 (
+    clk   : input   clock          ,
+    rst   : input   reset          ,
+    membus: modport Membus::slave  ,
+    uart  : modport uart_if::device,
+) {
+    var dll     : logic<8>;
+    var dlm     : logic<8>;
+    var ier     : logic<8>;
+    var fcr     : logic<8>;
+    var lcr     : logic<8>;
+    var mcr     : logic<8>;
+    var scr     : logic<8>;
+    var rx_data : logic<8>;
+    var rx_valid: logic   ;
+    var tx_data : logic<8>;
+    var tx_valid: logic   ;
+
+    let dlab: logic    = lcr[7];
+    let lsr : logic<8> = {1'b0, !tx_valid, !tx_valid, 4'b0, rx_valid};
+
+    let offset       : logic<3>                 = membus.addr[2:0];
+    let shift        : logic<6>                 = {offset, 3'b0};
+    let shifted_wdata: logic<MEMBUS_DATA_WIDTH> = membus.wdata >> shift;
+    let write_byte   : logic<8>                 = shifted_wdata[7:0];
+
+    let value: logic<8> = case offset {
+        0      : if dlab ? dll : rx_data,
+        1      : if dlab ? dlm : ier,
+        2      : 8'h01,
+        3      : lcr,
+        4      : mcr,
+        5      : lsr,
+        6      : 8'h00,
+        7      : scr,
+        default: 8'h00,
+    };
+
+    always_comb {
+        membus.ready  = 1;
+        uart.rx_ready = !rx_valid;
+        uart.tx_valid = tx_valid;
+        uart.tx_data  = tx_data;
+    }
+
+    always_ff {
+        if_reset {
+            membus.rvalid = 0;
+            membus.rdata  = 0;
+            dll           = 0;
+            dlm           = 0;
+            ier           = 0;
+            fcr           = 0;
+            lcr           = 0;
+            mcr           = 0;
+            scr           = 0;
+            rx_data       = 0;
+            rx_valid      = 0;
+            tx_data       = 0;
+            tx_valid      = 0;
+        } else {
+            membus.rvalid = membus.valid;
+
+            if tx_valid && uart.tx_ready {
+                tx_valid = 0;
+            }
+
+            if membus.valid {
+                // 応答cycleまでread dataを保持する
+                membus.rdata = {56'b0, value} << shift;
+
+                if membus.wen && membus.wmask[offset] {
+                    case offset {
+                        0: if dlab {
+                            dll = write_byte;
+                        } else {
+                            tx_data  = write_byte;
+                            tx_valid = 1;
+                        }
+                        1: if dlab {
+                            dlm = write_byte;
+                        } else {
+                            ier = write_byte & 8'h0f;
+                        }
+                        2: {
+                            fcr = write_byte;
+                            if write_byte[1] {
+                                rx_valid = 0;
+                            }
+                        }
+                        3      : lcr = write_byte;
+                        4      : mcr = write_byte;
+                        7      : scr = write_byte;
+                        default: {}
+                    }
+                } else if !membus.wen && offset == 0 && !dlab {
+                    // RBRをreadしたので受信dataを消費する
+                    rx_valid = 0;
+                }
+            }
+
+            if uart.rx_valid && uart.rx_ready {
+                rx_data  = uart.rx_data;
+                rx_valid = 1;
+            }
+        }
+    }
+}
