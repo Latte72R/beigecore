@@ -470,9 +470,6 @@ module core (
     always_ff {
         if_reset {
             serial_pending = 0;
-        } else if csru_raise_trap {
-            // トラップ時は後続の直列化命令もフラッシュされる。
-            serial_pending = 0;
         } else {
             if serial_complete {
                 serial_pending = 0;
@@ -496,7 +493,7 @@ module core (
         if_reset {
             mems_intr_checked = 0;
         } else if !mems_valid || memq_rready {
-            // 空、または現在の命令をMEMから取り出した。
+            // 空または現在の命令をMEMから取り出した
             mems_intr_checked = 0;
         } else if mems_at_rob_head {
             mems_intr_checked = 1;
