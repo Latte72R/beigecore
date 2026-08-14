@@ -57,7 +57,7 @@ void set_nonblocking(void) {
     return;
   }
   new_setting = old_setting;
-  new_setting.c_lflag &= ~(ICANON | ECHO);
+  new_setting.c_lflag &= ~(ICANON | ECHO | ISIG);
   if (tcsetattr(STDIN_FILENO, TCSANOW, &new_setting) == -1) {
     perror("tcsetattr");
     return;
