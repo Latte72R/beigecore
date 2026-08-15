@@ -23,5 +23,11 @@ module top_tang (
         clk                      ,
         rst                      ,
         led             : led_top,
+        uart_rx_valid   : 0      ,
+        uart_rx_ready   : _      ,
+        uart_rx_data    : 0      ,
+        uart_tx_valid   : _      ,
+        uart_tx_ready   : 1      ,
+        uart_tx_data    : _      ,
     );
 }
