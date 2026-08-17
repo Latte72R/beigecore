@@ -25,7 +25,8 @@ KONATA_LOG ?= results/konata.log
 KONATA_RAW ?= results/konata.raw
 
 SYNTH_TOP ?= top
-TIMING_PATHS ?= 10
+SYNTH_PARTS ?= core inst_fetcher amounit mmio_controller aclint_memory uart16550
+TIMING_PATHS ?= 3
 
 RV_TEST_DIR ?= test/share/riscv-tests
 RV_TEST_FILTER ?= rv64ui-p- rv64um-p- rv64ua-p- rv64uc-p-
@@ -91,7 +92,7 @@ OPENSBI_ARGS := PLATFORM=generic \
 
 .DEFAULT_GOAL := help
 
-.PHONY: help build clean sim test debug konata bench synth fmax
+.PHONY: help build clean sim test debug konata bench synth synth-top
 
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*?## "}; /^[a-zA-Z_-]+:.*?## / {printf "\033[36m%-12s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -195,19 +196,15 @@ bench: $(KONATA_SIM) ## Build and run CoreMark with a Konata trace
 	echo "Konata trace: $(KONATA_LOG)"; \
 	exit $$status
 
-synth: ## Run synthesis and dump timing/area reports
-	veryl synth --top $(SYNTH_TOP) \
-		--timing-paths $(TIMING_PATHS) \
-		--dump-timing \
-		--dump-area
-
-fmax: ## Estimate fmax from the critical path
-	@veryl synth --top $(SYNTH_TOP) --timing-paths 1 2>/dev/null | \
-	awk '/^  timing:/ { \
-		delay = $$2; \
-		printf "critical_path: %.3f ns\nfmax: %.2f MHz\n", delay, 1000.0 / delay; \
-		found = 1 \
-	} END { exit found ? 0 : 1 }'
+synth: ## Synthesize top-level blocks separately, excluding RAM/ROM
+	@set -e; \
+	for top in $(SYNTH_PARTS); do \
+		printf '\n--- synth: %s ---\n' "$$top"; \
+		veryl synth --quiet --top "$$top" \
+			--timing-paths $(TIMING_PATHS) \
+			--dump-timing \
+			--dump-area; \
+	done
 
 $(BOOTROM_ELF): $(BOOTROM_SOURCE) $(BOOTROM_LINKER)
 	@mkdir -p $(BOOT_DIR)

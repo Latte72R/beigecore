@@ -60,6 +60,3 @@ jobs:
 
             - name: make synth
               run: make synth
-
-            - name: make fmax
-              run: make fmax
