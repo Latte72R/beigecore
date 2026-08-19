@@ -1,8 +1,9 @@
 # Build output
 .build/
-/target
-/dependencies
-*.f
+target
+dependencies
+core.f
+bootrom.hex
 
 # Verilator
 obj_dir*
