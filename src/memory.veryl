@@ -6,8 +6,11 @@ module memory::<DATA_WIDTH: u32, ADDR_WIDTH: u32> #(
     rst   : input   reset                                     ,
     membus: modport membus_if::<DATA_WIDTH, ADDR_WIDTH>::slave,
 ) {
-    type DataType = logic   <DATA_WIDTH>                  ;
-    var mem     : DataType             [2 ** ADDR_WIDTH];
+    type DataType = logic<DATA_WIDTH>;
+
+    #[allow(initial_assign)]
+    var mem: DataType [2 ** ADDR_WIDTH];
+
     initial {
         // memを初期化する
         if FILEPATH != "" {
