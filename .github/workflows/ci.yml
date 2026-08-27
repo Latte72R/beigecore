@@ -28,15 +28,13 @@ jobs:
                     verilator \
                     yosys
 
-            - name: Install latest Veryl nightly
-              run: |
-                  cargo install \
-                    --git https://github.com/veryl-lang/veryl.git \
-                    --branch master \
-                    --locked \
-                    --force \
-                    veryl
-                  veryl --version
+            - name: Install Veryl nightly
+              uses: veryl-lang/setup-veryl@v1
+              with:
+                  version: nightly
+
+            - name: Show Veryl version
+              run: veryl --version
 
             - name: make build
               run: make build
