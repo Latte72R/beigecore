@@ -224,45 +224,27 @@ module mmio_controller (
         }
     }
 
-    // 新しく要求を受け入れる
-    function accept_request () {
-        req_saved.valid = req_core.ready && req_core.valid;
-        if req_core.ready && req_core.valid {
-            last_device  = get_device(req_core.addr);
-            is_requested = get_device_ready(last_device);
-            // reqを保存
-            req_saved.addr  = req_core.addr;
-            req_saved.wen   = req_core.wen;
-            req_saved.wdata = req_core.wdata;
-            req_saved.wmask = req_core.wmask;
-        }
-    }
-
-    function on_clock () {
-        if req_saved.valid {
-            if is_requested {
-                if get_device_rvalid(last_device) {
-                    accept_request();
-                }
-            } else {
-                is_requested = get_device_ready(last_device);
-            }
-        } else {
-            accept_request();
-        }
-    }
-
-    function on_reset () {
-        last_device  = Device::UNKNOWN;
-        is_requested = 0;
-        req_saved    = 0;
-    }
-
     always_ff {
         if_reset {
-            on_reset();
+            last_device  = Device::UNKNOWN;
+            is_requested = 0;
+            req_saved    = 0;
         } else {
-            on_clock();
+            // 新しい要求を受け入れる
+            if (!req_saved.valid) || (is_requested && get_device_rvalid(last_device)) {
+                if req_core.ready && req_core.valid {
+                    // reqを保存
+                    let device      : Device = get_device(req_core.addr);
+                    req_saved    = core_req;
+                    last_device  = device;
+                    is_requested = get_device_ready(device);
+                } else {
+                    req_saved.valid = 0;
+                }
+            } else if req_saved.valid && !is_requested {
+                // デバイスの準備が完了するのを待つ
+                is_requested = get_device_ready(last_device);
+            }
         }
     }
 }
