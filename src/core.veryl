@@ -848,7 +848,7 @@ module core (
 
     inst id_ex_fifo: fifo #(
         DATA_TYPE: exq_type,
-        WIDTH    : 2       ,
+        WIDTH    : 4       ,
     ) (
         clk                   ,
         rst                   ,
@@ -863,7 +863,7 @@ module core (
 
     inst ex_mem_fifo: fifo #(
         DATA_TYPE: memq_type,
-        WIDTH    : 2        ,
+        WIDTH    : 4        ,
     ) (
         clk                   ,
         rst                   ,

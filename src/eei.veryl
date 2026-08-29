@@ -16,7 +16,7 @@ package eei {
     const MSTATUS_UXL: UInt64 = 2 << 32;
     const MSTATUS_SXL: UInt64 = 2 << 34;
 
-    const ROB_WIDTH: u32              = 2;
+    const ROB_WIDTH: u32              = 4;
     type RobTag    = logic<ROB_WIDTH>;
 
     // メモリのデータ幅
