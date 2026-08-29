@@ -20,30 +20,30 @@ module core (
     }
 
     struct memq_type {
-        rob_tag    : RobTag          ,
-        addr       : Addr            ,
-        bits       : Inst            ,
-        ctrl       : InstCtrl        ,
-        imm        : UIntX           ,
-        expt       : ExceptionInfo   ,
-        alu_result : UIntX           ,
-        rs1_addr   : logic        <5>,
-        rs1_data   : UIntX           ,
-        rs2_data   : UIntX           ,
-        br_taken   : logic           ,
-        jump_addr  : Addr            ,
-        pred_taken : logic           ,
-        pred_target: Addr            ,
+        rob_tag    : RobTag       ,
+        addr       : Addr         ,
+        bits       : Inst         ,
+        ctrl       : InstCtrl     ,
+        imm        : UIntX        ,
+        expt       : ExceptionInfo,
+        alu_result : UIntX        ,
+        rs1_addr   : ArchReg      ,
+        rs1_data   : UIntX        ,
+        rs2_data   : UIntX        ,
+        br_taken   : logic        ,
+        jump_addr  : Addr         ,
+        pred_taken : logic        ,
+        pred_target: Addr         ,
     }
 
     struct rob_entry_type {
-        addr      : Addr            ,
-        bits      : Inst            ,
-        ctrl      : InstCtrl        ,
-        rd_addr   : logic        <5>,
-        result    : UIntX           ,
-        expt      : ExceptionInfo   ,
-        raise_trap: logic           ,
+        addr      : Addr         ,
+        bits      : Inst         ,
+        ctrl      : InstCtrl     ,
+        rd_addr   : ArchReg      ,
+        result    : UIntX        ,
+        expt      : ExceptionInfo,
+        raise_trap: logic        ,
     }
 
     // ID -> EXのFIFO
@@ -193,15 +193,15 @@ module core (
     let exs_imm      : UIntX    = exq_rdata.imm;
 
     // レジスタ
-    var regfile: UIntX<32>;
+    var regfile: UIntX<ARCH_REG_COUNT>;
 
     // 各レジスタを最後に書く予定のROBエントリ
-    var producer_valid: logic  [32];
-    var producer_tag  : RobTag [32];
+    var producer_valid: logic  [ARCH_REG_COUNT];
+    var producer_tag  : RobTag [ARCH_REG_COUNT];
 
     // レジスタ番号
-    let exs_rs1_addr: logic<5> = exs_inst_bits[19:15];
-    let exs_rs2_addr: logic<5> = exs_inst_bits[24:20];
+    let exs_rs1_addr: ArchReg = exs_inst_bits[19:15];
+    let exs_rs2_addr: ArchReg = exs_inst_bits[24:20];
 
     // データハザード
     let exs_uses_rs1: logic = case exs_ctrl.itype {
@@ -435,12 +435,12 @@ module core (
 
     ///////////////////////////////// MEM Stage /////////////////////////////////
 
-    let mems_valid    : logic            = memq_rvalid;
-    let mems_pc       : Addr             = memq_rdata.addr;
-    let mems_inst_bits: Inst             = memq_rdata.bits;
-    let mems_ctrl     : InstCtrl         = memq_rdata.ctrl;
-    let mems_expt     : ExceptionInfo    = memq_rdata.expt;
-    let mems_rd_addr  : logic        <5> = mems_inst_bits[11:7];
+    let mems_valid    : logic         = memq_rvalid;
+    let mems_pc       : Addr          = memq_rdata.addr;
+    let mems_inst_bits: Inst          = memq_rdata.bits;
+    let mems_ctrl     : InstCtrl      = memq_rdata.ctrl;
+    let mems_expt     : ExceptionInfo = memq_rdata.expt;
+    let mems_rd_addr  : ArchReg       = mems_inst_bits[11:7];
 
     let mems_is_jalr              : logic = mems_ctrl.is_jump && mems_ctrl.itype == InstType::I;
     let mems_is_branch            : logic = inst_is_br(mems_ctrl);
@@ -565,10 +565,10 @@ module core (
 
     ///////////////////////////////// WB Stage /////////////////////////////////
 
-    let wbs_valid  : logic       = rob_commit_valid;
-    let wbs_ctrl   : InstCtrl    = rob_commit_data.ctrl;
-    let wbs_rd_addr: logic   <5> = rob_commit_data.rd_addr;
-    let wbs_wb_data: UIntX       = rob_commit_data.result;
+    let wbs_valid  : logic    = rob_commit_valid;
+    let wbs_ctrl   : InstCtrl = rob_commit_data.ctrl;
+    let wbs_rd_addr: ArchReg  = rob_commit_data.rd_addr;
+    let wbs_wb_data: UIntX    = rob_commit_data.result;
 
     always_ff {
         if_reset {
@@ -602,13 +602,13 @@ module core (
 
     always_ff {
         if_reset {
-            for i in 0..32 {
+            for i in 0..ARCH_REG_COUNT {
                 producer_valid[i] = 0;
                 producer_tag[i]   = 0;
             }
         } else if csru_raise_trap {
             // ROBと一緒に、フラッシュした命令の依存情報も破棄する
-            for i in 0..32 {
+            for i in 0..ARCH_REG_COUNT {
                 producer_valid[i] = 0;
                 producer_tag[i]   = 0;
             }

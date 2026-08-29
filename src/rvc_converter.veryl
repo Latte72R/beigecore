@@ -6,10 +6,10 @@ module rvc_converter (
     is_rvc: output logic    ,
     inst32: output Inst     , // expanded inst16
 ) {
-    let rs1 : logic<5> = inst16[11:7];
-    let rs2 : logic<5> = inst16[6:2];
-    let rs1d: logic<5> = {2'b01, inst16[9:7]};
-    let rs2d: logic<5> = {2'b01, inst16[4:2]};
+    let rs1 : ArchReg = inst16[11:7];
+    let rs2 : ArchReg = inst16[6:2];
+    let rs1d: ArchReg = {2'b01, inst16[9:7]};
+    let rs2d: ArchReg = {2'b01, inst16[4:2]};
 
     let imm_i    : logic<12> = {inst16[12] repeat 7, inst16[6:2]};
     let imm_shamt: logic<6>  = {inst16[12], inst16[6:2]};

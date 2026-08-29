@@ -9,9 +9,9 @@ module csrunit (
     inst_bits  : input   Inst                ,
     ctrl       : input   InstCtrl            ,
     expt_info  : input   ExceptionInfo       ,
-    rd_addr    : input   logic           <5> ,
+    rd_addr    : input   ArchReg             ,
     csr_addr   : input   logic           <12>,
-    rs1_addr   : input   logic           <5> ,
+    rs1_addr   : input   ArchReg             ,
     rs1_data   : input   UIntX               ,
     can_intr   : input   logic               ,
     rdata      : output  UIntX               ,
@@ -284,7 +284,7 @@ module csrunit (
                 default     : 0,
             },
         };
-        let wsource: UIntX = if ctrl.funct3[2] ? {1'b0 repeat XLEN - 5, rs1_addr} : rs1_data;
+        let wsource: UIntX = if ctrl.funct3[2] ? {1'b0 repeat XLEN - ARCH_REG_WIDTH, rs1_addr} : rs1_data;
         wdata   = case ctrl.funct3[1:0] {
                 2'b01  : wsource,
                 2'b10  : rdata | wsource,
