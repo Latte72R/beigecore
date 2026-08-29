@@ -23,6 +23,22 @@ module core (
         rd_old_preg: PhysReg      ,
     }
 
+    struct euq_type {
+        addr       : Addr         ,
+        bits       : Inst         ,
+        ctrl       : InstCtrl     ,
+        imm        : UIntX        ,
+        expt       : ExceptionInfo,
+        pred_taken : logic        ,
+        pred_target: Addr         ,
+        rs1_preg   : PhysReg      ,
+        rs2_preg   : PhysReg      ,
+        rd_preg    : PhysReg      ,
+        rd_areg    : ArchReg      ,
+        old_preg   : PhysReg      ,
+        rob_tag    : RobTag       ,
+    }
+
     struct memq_type {
         rob_tag    : RobTag       ,
         addr       : Addr         ,
@@ -191,23 +207,61 @@ module core (
 
     var csru_priv_mode: PrivMode;
 
+    var aluq_wready: logic   ;
+    var aluq_wvalid: logic   ;
+    var aluq_rready: logic   ;
+    var aluq_rvalid: logic   ;
+    var aluq_wdata : euq_type;
+    var aluq_rdata : euq_type;
+
+    var loadq_wready: logic   ;
+    var loadq_wvalid: logic   ;
+    var loadq_rready: logic   ;
+    var loadq_rvalid: logic   ;
+    var loadq_wdata : euq_type;
+    var loadq_rdata : euq_type;
+
+    var storeq_wready: logic   ;
+    var storeq_wvalid: logic   ;
+    var storeq_rready: logic   ;
+    var storeq_rvalid: logic   ;
+    var storeq_wdata : euq_type;
+    var storeq_rdata : euq_type;
+
+    var muldivq_wready: logic   ;
+    var muldivq_wvalid: logic   ;
+    var muldivq_rready: logic   ;
+    var muldivq_rvalid: logic   ;
+    var muldivq_wdata : euq_type;
+    var muldivq_rdata : euq_type;
+
+    var csrq_wready: logic   ;
+    var csrq_wvalid: logic   ;
+    var csrq_rready: logic   ;
+    var csrq_rvalid: logic   ;
+    var csrq_wdata : euq_type;
+    var csrq_rdata : euq_type;
+
+    // dispatch: 命令種別に応じて該当キューに格納
+    let ids_is_alu   : logic = !inst_is_memop(ids_ctrl) && !ids_ctrl.is_muldiv && !ids_ctrl.is_csr;
+    let ids_is_load  : logic = ids_ctrl.is_load;
+    let ids_is_store : logic = inst_is_store(ids_ctrl);
+    let ids_is_muldiv: logic = ids_ctrl.is_muldiv;
+    let ids_is_csr   : logic = ids_ctrl.is_csr;
+
+    var dispatch_data: euq_type;
+
     always_comb {
-        // ID -> EX
-        i_membus.rready = exq_wready;
-        exq_wvalid      = i_membus.rvalid;
-
-        exq_wdata.addr = i_membus.raddr;
-        exq_wdata.bits = i_membus.rdata;
-        exq_wdata.ctrl = ids_ctrl;
-        exq_wdata.imm  = ids_imm;
-
-        exq_wdata.pred_taken  = ids_pred_taken;
-        exq_wdata.pred_target = ids_pred_target;
-
-        exq_wdata.rs1_preg    = rat_read1_data;
-        exq_wdata.rs2_preg    = rat_read2_data;
-        exq_wdata.rd_preg     = ids_new_preg;
-        exq_wdata.rd_old_preg = ids_old_preg;
+        // ID rready: 該当キューが空き + ROB 空き
+        i_membus.rready = rob_allocate_ready
+            && switch {
+                ids_is_alu   : aluq_wready,
+                ids_is_load  : loadq_wready,
+                ids_is_store : storeq_wready,
+                ids_is_muldiv: muldivq_wready,
+                ids_is_csr   : csrq_wready,
+                default      : 1,
+            };
 
         // exception
         exq_wdata.expt = 0;
@@ -228,6 +282,68 @@ module core (
             exq_wdata.expt.cause = CsrCause::BREAKPOINT;
             exq_wdata.expt.value = ids_pc;
         }
+
+        // 該当キューの wvalid / wdata を駆動
+        aluq_wvalid    = ids_fire && ids_is_alu && aluq_wready;
+        loadq_wvalid   = ids_fire && ids_is_load && loadq_wready;
+        storeq_wvalid  = ids_fire && ids_is_store && storeq_wready;
+        muldivq_wvalid = ids_fire && ids_is_muldiv && muldivq_wready;
+        csrq_wvalid    = ids_fire && ids_is_csr && csrq_wready;
+
+        // dispatch_data を組み立て
+        dispatch_data.addr        = ids_pc;
+        dispatch_data.bits        = ids_inst_bits;
+        dispatch_data.ctrl        = ids_ctrl;
+        dispatch_data.imm         = ids_imm;
+        dispatch_data.expt        = exq_wdata.expt; // 既存の例外検出ロジックの結果
+        dispatch_data.rs1_preg    = rat_read1_data;
+        dispatch_data.rs2_preg    = rat_read2_data;
+        dispatch_data.rd_preg     = ids_new_preg;
+        dispatch_data.rd_areg     = ids_rd_areg;
+        dispatch_data.old_preg    = ids_old_preg;
+        dispatch_data.rob_tag     = rob_allocate_tag;
+        dispatch_data.pred_taken  = ids_pred_taken;
+        dispatch_data.pred_target = ids_pred_target;
+
+        // dispatch_data を代入
+        aluq_wdata    = dispatch_data;
+        loadq_wdata   = dispatch_data;
+        storeq_wdata  = dispatch_data;
+        muldivq_wdata = dispatch_data;
+        csrq_wdata    = dispatch_data;
+
+        // === ROB allocate (dispatch 時) ===
+        rob_allocate_valid = ids_fire;
+        rob_allocate_done  = !ids_is_load && !ids_is_store && !ids_is_muldiv && !ids_is_csr;
+        // (ALU だけ即 done、他は後で complete)
+        rob_allocate_data.addr       = ids_pc;
+        rob_allocate_data.bits       = ids_inst_bits;
+        rob_allocate_data.ctrl       = ids_ctrl;
+        rob_allocate_data.rd_areg    = ids_rd_areg;
+        rob_allocate_data.old_preg   = ids_old_preg;
+        rob_allocate_data.result     = 0; // 後で complete 時に上書き
+        rob_allocate_data.expt       = exq_wdata.expt;
+        rob_allocate_data.raise_trap = 0;
+    }
+
+    always_comb {
+        // ID -> EX
+        // i_membus.rready = exq_wready;
+        // exq_wvalid = i_membus.rvalid;
+        exq_wvalid = 0;
+
+        // exq_wdata.addr = i_membus.raddr;
+        // exq_wdata.bits = i_membus.rdata;
+        // exq_wdata.ctrl = ids_ctrl;
+        // exq_wdata.imm  = ids_imm;
+
+        // exq_wdata.pred_taken  = ids_pred_taken;
+        // exq_wdata.pred_target = ids_pred_target;
+
+        // exq_wdata.rs1_preg    = rat_read1_data;
+        // exq_wdata.rs2_preg    = rat_read2_data;
+        // exq_wdata.rd_preg     = ids_new_preg;
+        // exq_wdata.rd_old_preg = ids_old_preg;
     }
 
     ///////////////////////////////// EX Stage /////////////////////////////////
@@ -382,20 +498,20 @@ module core (
         || exq_rdata.expt.valid;
 
     always_comb {
-        rob_allocate_done          = !exs_needs_mem;
-        rob_allocate_data.addr     = exq_rdata.addr;
-        rob_allocate_data.bits     = exq_rdata.bits;
-        rob_allocate_data.ctrl     = exq_rdata.ctrl;
-        rob_allocate_data.rd_areg  = exq_rdata.bits[11:7];
-        rob_allocate_data.old_preg = exq_rdata.rd_old_preg;
-        rob_allocate_data.result   = switch {
-            exs_ctrl.is_lui   : exq_rdata.imm,
-            exs_ctrl.is_muldiv: exs_muldiv_result,
-            default           : exs_alu_result,
-        };
+        // rob_allocate_done          = !exs_needs_mem;
+        // rob_allocate_data.addr     = exq_rdata.addr;
+        // rob_allocate_data.bits     = exq_rdata.bits;
+        // rob_allocate_data.ctrl     = exq_rdata.ctrl;
+        // rob_allocate_data.rd_areg  = exq_rdata.bits[11:7];
+        // rob_allocate_data.old_preg = exq_rdata.rd_old_preg;
+        // rob_allocate_data.result   = switch {
+        //     exs_ctrl.is_lui   : exq_rdata.imm,
+        //     exs_ctrl.is_muldiv: exs_muldiv_result,
+        //     default           : exs_alu_result,
+        // };
 
-        rob_allocate_data.expt       = memq_wdata.expt;
-        rob_allocate_data.raise_trap = 0;
+        // rob_allocate_data.expt       = memq_wdata.expt;
+        // rob_allocate_data.raise_trap = 0;
 
         rob_query1_tag = producer_tag[exs_rs1_areg];
         rob_query2_tag = producer_tag[exs_rs2_areg];
@@ -428,9 +544,9 @@ module core (
         exs_actual_target = exs_add_result & ~1;
 
         // ROBだけallocationされたり MEM FIFOだけ書き込まれたりするのを防ぐ
-        rob_allocate_valid = exq_rvalid && exs_route_ready && !exs_stall && !serial_pending && !control_hazard;
-        exq_rready         = rob_allocate_ready && exs_route_ready && !exs_stall && !serial_pending && !control_hazard;
-        memq_wvalid        = rob_allocate_fire && exs_needs_mem;
+        // rob_allocate_valid = exq_rvalid && exs_route_ready && !exs_stall && !serial_pending && !control_hazard;
+        exq_rready  = rob_allocate_ready && exs_route_ready && !exs_stall && !serial_pending && !control_hazard;
+        memq_wvalid = rob_allocate_fire && exs_needs_mem;
 
         memq_wdata.addr = exq_rdata.addr;
         memq_wdata.bits = exq_rdata.bits;
@@ -895,6 +1011,81 @@ module core (
     );
 
     ///////////////////////////////// FIFO /////////////////////////////////
+
+    inst aluq: fifo #(
+        DATA_TYPE: euq_type,
+        WIDTH    : 3       ,
+    ) (
+        clk                   ,
+        rst                   ,
+        flush : control_hazard,
+        wready: aluq_wready   ,
+        wvalid: aluq_wvalid   ,
+        wdata : aluq_wdata    ,
+        rready: aluq_rready   ,
+        rvalid: aluq_rvalid   ,
+        rdata : aluq_rdata    ,
+    );
+
+    inst loadq: fifo #(
+        DATA_TYPE: euq_type,
+        WIDTH    : 3       ,
+    ) (
+        clk                   ,
+        rst                   ,
+        flush : control_hazard,
+        wready: loadq_wready  ,
+        wvalid: loadq_wvalid  ,
+        wdata : loadq_wdata   ,
+        rready: loadq_rready  ,
+        rvalid: loadq_rvalid  ,
+        rdata : loadq_rdata   ,
+    );
+
+    inst storeq: fifo #(
+        DATA_TYPE: euq_type,
+        WIDTH    : 3       ,
+    ) (
+        clk                   ,
+        rst                   ,
+        flush : control_hazard,
+        wready: storeq_wready ,
+        wvalid: storeq_wvalid ,
+        wdata : storeq_wdata  ,
+        rready: storeq_rready ,
+        rvalid: storeq_rvalid ,
+        rdata : storeq_rdata  ,
+    );
+
+    inst muldivq: fifo #(
+        DATA_TYPE: euq_type,
+        WIDTH    : 3       ,
+    ) (
+        clk                   ,
+        rst                   ,
+        flush : control_hazard,
+        wready: muldivq_wready,
+        wvalid: muldivq_wvalid,
+        wdata : muldivq_wdata ,
+        rready: muldivq_rready,
+        rvalid: muldivq_rvalid,
+        rdata : muldivq_rdata ,
+    );
+
+    inst csrq: fifo #(
+        DATA_TYPE: euq_type,
+        WIDTH    : 3       ,
+    ) (
+        clk                   ,
+        rst                   ,
+        flush : control_hazard,
+        wready: csrq_wready   ,
+        wvalid: csrq_wvalid   ,
+        wdata : csrq_wdata    ,
+        rready: csrq_rready   ,
+        rvalid: csrq_rvalid   ,
+        rdata : csrq_rdata    ,
+    );
 
     inst id_ex_fifo: fifo #(
         DATA_TYPE: exq_type,
