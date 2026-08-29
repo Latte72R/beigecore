@@ -27,7 +27,7 @@ module core (
         imm        : UIntX        ,
         expt       : ExceptionInfo,
         alu_result : UIntX        ,
-        rs1_addr   : ArchReg      ,
+        rs1_areg   : ArchReg      ,
         rs1_data   : UIntX        ,
         rs2_data   : UIntX        ,
         br_taken   : logic        ,
@@ -40,7 +40,8 @@ module core (
         addr      : Addr         ,
         bits      : Inst         ,
         ctrl      : InstCtrl     ,
-        rd_addr   : ArchReg      ,
+        rd_areg   : ArchReg      ,
+        old_preg  : PhysReg      ,
         result    : UIntX        ,
         expt      : ExceptionInfo,
         raise_trap: logic        ,
@@ -200,8 +201,8 @@ module core (
     var producer_tag  : RobTag [ARCH_REG_COUNT];
 
     // レジスタ番号
-    let exs_rs1_addr: ArchReg = exs_inst_bits[19:15];
-    let exs_rs2_addr: ArchReg = exs_inst_bits[24:20];
+    let exs_rs1_areg: ArchReg = exs_inst_bits[19:15];
+    let exs_rs2_areg: ArchReg = exs_inst_bits[24:20];
 
     // データハザード
     let exs_uses_rs1: logic = case exs_ctrl.itype {
@@ -217,22 +218,22 @@ module core (
         InstType::B: 1,
         default    : 0,
     };
-    let exs_rs1_has_producer: logic = exs_uses_rs1 && exs_rs1_addr != 0 && producer_valid[exs_rs1_addr];
-    let exs_rs2_has_producer: logic = exs_uses_rs2 && exs_rs2_addr != 0 && producer_valid[exs_rs2_addr];
+    let exs_rs1_has_producer: logic = exs_uses_rs1 && exs_rs1_areg != 0 && producer_valid[exs_rs1_areg];
+    let exs_rs2_has_producer: logic = exs_uses_rs2 && exs_rs2_areg != 0 && producer_valid[exs_rs2_areg];
     let exs_rs1_data_hazard : logic = exs_valid && exs_rs1_has_producer && !rob_query1_done;
     let exs_rs2_data_hazard : logic = exs_valid && exs_rs2_has_producer && !rob_query2_done;
     let exs_data_hazard     : logic = exs_rs1_data_hazard || exs_rs2_data_hazard;
 
     // ソースレジスタのデータ
     let exs_rs1_data: UIntX = switch {
-        exs_rs1_addr == 0                      : 0,
+        exs_rs1_areg == 0                      : 0,
         exs_rs1_has_producer && rob_query1_done: rob_query1_data.result,
-        default                                : regfile[exs_rs1_addr],
+        default                                : regfile[exs_rs1_areg],
     };
     let exs_rs2_data: UIntX = switch {
-        exs_rs2_addr == 0                      : 0,
+        exs_rs2_areg == 0                      : 0,
         exs_rs2_has_producer && rob_query2_done: rob_query2_data.result,
-        default                                : regfile[exs_rs2_addr],
+        default                                : regfile[exs_rs2_areg],
     };
 
     // ALU
@@ -340,7 +341,7 @@ module core (
         rob_allocate_data.addr    = exq_rdata.addr;
         rob_allocate_data.bits    = exq_rdata.bits;
         rob_allocate_data.ctrl    = exq_rdata.ctrl;
-        rob_allocate_data.rd_addr = exq_rdata.bits[11:7];
+        rob_allocate_data.rd_areg = exq_rdata.bits[11:7];
         rob_allocate_data.result  = switch {
             exs_ctrl.is_lui   : exq_rdata.imm,
             exs_ctrl.is_muldiv: exs_muldiv_result,
@@ -350,8 +351,8 @@ module core (
         rob_allocate_data.expt       = memq_wdata.expt;
         rob_allocate_data.raise_trap = 0;
 
-        rob_query1_tag = producer_tag[exs_rs1_addr];
-        rob_query2_tag = producer_tag[exs_rs2_addr];
+        rob_query1_tag = producer_tag[exs_rs1_areg];
+        rob_query2_tag = producer_tag[exs_rs2_areg];
     }
 
     // 未解決の直列化命令がROB/MEM内にある
@@ -372,7 +373,7 @@ module core (
     // ROBに登録された命令が直列化命令の場合，次の命令のROB登録を待つ
     let serial_allocate: logic = rob_allocate_fire && exs_is_serializing;
 
-    let producer_allocate: logic = rob_allocate_fire && rob_allocate_data.ctrl.rwb_en && rob_allocate_data.rd_addr != 0;
+    let producer_allocate: logic = rob_allocate_fire && rob_allocate_data.ctrl.rwb_en && rob_allocate_data.rd_areg != 0;
 
     always_comb {
         // EX -> MEM
@@ -390,7 +391,7 @@ module core (
         memq_wdata.ctrl = exq_rdata.ctrl;
         memq_wdata.imm  = exq_rdata.imm;
 
-        memq_wdata.rs1_addr = exs_rs1_addr;
+        memq_wdata.rs1_areg = exs_rs1_areg;
         memq_wdata.rs1_data = exs_rs1_data;
         memq_wdata.rs2_data = exs_rs2_data;
         // MEMへ進む命令で必要なALU結果はロード/ストアのアドレスだけ
@@ -440,7 +441,7 @@ module core (
     let mems_inst_bits: Inst          = memq_rdata.bits;
     let mems_ctrl     : InstCtrl      = memq_rdata.ctrl;
     let mems_expt     : ExceptionInfo = memq_rdata.expt;
-    let mems_rd_addr  : ArchReg       = mems_inst_bits[11:7];
+    let mems_rd_areg  : ArchReg       = mems_inst_bits[11:7];
 
     let mems_is_jalr              : logic = mems_ctrl.is_jump && mems_ctrl.itype == InstType::I;
     let mems_is_branch            : logic = inst_is_br(mems_ctrl);
@@ -519,9 +520,9 @@ module core (
         inst_bits  : mems_inst_bits                ,
         ctrl       : mems_ctrl                     ,
         expt_info  : mems_expt                     ,
-        rd_addr    : mems_rd_addr                  ,
+        rd_areg    : mems_rd_areg                  ,
         csr_addr   : mems_inst_bits[31:20]         ,
-        rs1_addr   : memq_rdata.rs1_addr           ,
+        rs1_areg   : memq_rdata.rs1_areg           ,
         rs1_data   : memq_rdata.rs1_data           ,
         can_intr   : mems_can_intr                 ,
         rdata      : csru_rdata                    ,
@@ -543,7 +544,7 @@ module core (
         rob_complete_data.addr    = memq_rdata.addr;
         rob_complete_data.bits    = memq_rdata.bits;
         rob_complete_data.ctrl    = memq_rdata.ctrl;
-        rob_complete_data.rd_addr = memq_rdata.bits[11:7];
+        rob_complete_data.rd_areg = memq_rdata.bits[11:7];
 
         rob_complete_data.result = switch {
             mems_ctrl.is_lui                     : memq_rdata.imm,
@@ -567,7 +568,7 @@ module core (
 
     let wbs_valid  : logic    = rob_commit_valid;
     let wbs_ctrl   : InstCtrl = rob_commit_data.ctrl;
-    let wbs_rd_addr: ArchReg  = rob_commit_data.rd_addr;
+    let wbs_rd_areg: ArchReg  = rob_commit_data.rd_areg;
     let wbs_wb_data: UIntX    = rob_commit_data.result;
 
     always_ff {
@@ -582,9 +583,9 @@ module core (
 
     always_ff {
         // ROB先頭が完成済み & コミットが成立 & レジスタ書込み命令 & x0ではない & trapではない
-        if rob_commit_valid && rob_commit_ready && rob_commit_data.ctrl.rwb_en && rob_commit_data.rd_addr != 0
+        if rob_commit_valid && rob_commit_ready && rob_commit_data.ctrl.rwb_en && rob_commit_data.rd_areg != 0
             && !rob_commit_data.raise_trap {
-            regfile[rob_commit_data.rd_addr] = rob_commit_data.result;
+            regfile[rob_commit_data.rd_areg] = rob_commit_data.result;
         }
     }
 
@@ -598,7 +599,7 @@ module core (
     // ROB先頭命令が実際にコミットされた
     let rob_commit_fire: logic = rob_commit_valid && rob_commit_ready;
 
-    let producer_commit: logic = rob_commit_fire && rob_commit_data.ctrl.rwb_en && rob_commit_data.rd_addr != 0;
+    let producer_commit: logic = rob_commit_fire && rob_commit_data.ctrl.rwb_en && rob_commit_data.rd_areg != 0;
 
     always_ff {
         if_reset {
@@ -614,15 +615,15 @@ module core (
             }
         } else {
             // 最新producer自身がcommitした場合だけ解除
-            if producer_commit && producer_valid[rob_commit_data.rd_addr] && producer_tag[rob_commit_data.rd_addr]
-                == rob_head_tag && !(producer_allocate && rob_allocate_data.rd_addr == rob_commit_data.rd_addr) {
-                producer_valid[rob_commit_data.rd_addr] = 0;
+            if producer_commit && producer_valid[rob_commit_data.rd_areg] && producer_tag[rob_commit_data.rd_areg]
+                == rob_head_tag && !(producer_allocate && rob_allocate_data.rd_areg == rob_commit_data.rd_areg) {
+                producer_valid[rob_commit_data.rd_areg] = 0;
             }
 
             // 同じサイクルなら新しいallocationを優先
             if producer_allocate {
-                producer_valid[rob_allocate_data.rd_addr] = 1;
-                producer_tag[rob_allocate_data.rd_addr]   = rob_allocate_tag;
+                producer_valid[rob_allocate_data.rd_areg] = 1;
+                producer_tag[rob_allocate_data.rd_areg]   = rob_allocate_tag;
             }
         }
     }
@@ -742,7 +743,7 @@ module core (
                 if wbs_valid {
                     $display("  %h : %h", rob_commit_data.addr, rob_commit_data.bits);
                     if wbs_ctrl.rwb_en {
-                        $display("  reg[%d] <= %h", wbs_rd_addr, wbs_wb_data);
+                        $display("  reg[%d] <= %h", wbs_rd_areg, wbs_wb_data);
                     }
                 }
 
