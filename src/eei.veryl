@@ -23,14 +23,14 @@ package eei {
     type RobTag    = logic<ROB_WIDTH>;
 
     // Physical Register File
-    const PRF_ENTRY_COUNT: u32                   = 64;
-    const PRF_ADDR_WIDTH : u32                   = 6;
-    type PhysReg         = logic<PRF_ADDR_WIDTH>;
+    const PREG_COUNT     : u32                    = 64;
+    const PREG_ADDR_WIDTH: u32                    = 6;
+    type PhysReg         = logic<PREG_ADDR_WIDTH>;
 
     // Architectural Registers
-    const ARCH_REG_COUNT: u32                   = 32;
-    const ARCH_REG_WIDTH: u32                   = 5;
-    type ArchReg        = logic<ARCH_REG_WIDTH>;
+    const AREG_COUNT     : u32                    = 32;
+    const AREG_ADDR_WIDTH: u32                    = 5;
+    type ArchReg         = logic<AREG_ADDR_WIDTH>;
 
     // メモリのデータ幅
     const MEMBUS_DATA_WIDTH: u32 = 64;

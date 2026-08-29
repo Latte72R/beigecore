@@ -194,11 +194,11 @@ module core (
     let exs_imm      : UIntX    = exq_rdata.imm;
 
     // レジスタ
-    var regfile: UIntX<ARCH_REG_COUNT>;
+    var regfile: UIntX<AREG_COUNT>;
 
     // 各レジスタを最後に書く予定のROBエントリ
-    var producer_valid: logic  [ARCH_REG_COUNT];
-    var producer_tag  : RobTag [ARCH_REG_COUNT];
+    var producer_valid: logic  [AREG_COUNT];
+    var producer_tag  : RobTag [AREG_COUNT];
 
     // レジスタ番号
     let exs_rs1_areg: ArchReg = exs_inst_bits[19:15];
@@ -603,13 +603,13 @@ module core (
 
     always_ff {
         if_reset {
-            for i in 0..ARCH_REG_COUNT {
+            for i in 0..AREG_COUNT {
                 producer_valid[i] = 0;
                 producer_tag[i]   = 0;
             }
         } else if csru_raise_trap {
             // ROBと一緒に、フラッシュした命令の依存情報も破棄する
-            for i in 0..ARCH_REG_COUNT {
+            for i in 0..AREG_COUNT {
                 producer_valid[i] = 0;
                 producer_tag[i]   = 0;
             }

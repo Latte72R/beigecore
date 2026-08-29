@@ -16,7 +16,7 @@ module physical_register_file (
     write_data : input UIntX  ,
 ) {
     #[sv("syn_ramstyle=\"registers\"")]
-    var mem: UIntX [PRF_ENTRY_COUNT];
+    var mem: UIntX [PREG_COUNT];
 
     always_comb {
         read1_data = mem[read1_addr];

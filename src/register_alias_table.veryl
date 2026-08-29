@@ -22,7 +22,7 @@ module register_alias_table (
     write_old  : output PhysReg, // 書き込み前の値 (rename 時 ROB に格納)
 ) {
     #[sv("syn_ramstyle=\"registers\"")]
-    var mem: PhysReg [ARCH_REG_COUNT];
+    var mem: PhysReg [AREG_COUNT];
 
     always_comb {
         read1_data = mem[read1_addr];
@@ -32,7 +32,7 @@ module register_alias_table (
 
     always_ff {
         if_reset {
-            for i in 0..ARCH_REG_COUNT {
+            for i in 0..AREG_COUNT {
                 mem[i] = i as PhysReg; // x_i → p_i
             }
         } else if write_valid {
