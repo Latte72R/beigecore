@@ -27,9 +27,13 @@ module free_list (
 
     #[allow(missing_reset_statement)]
     always_ff {
+        // reset 時にpreload
         if_reset {
             head = 0;
-            tail = 0;
+            for i in 0..(PREG_COUNT - AREG_COUNT) {
+                mem[i] = (AREG_COUNT + i) as PhysReg;
+            }
+            tail = (PREG_COUNT - AREG_COUNT) as PhysReg;
         } else {
             if wready && wvalid {
                 mem[tail] = wdata;

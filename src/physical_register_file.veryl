@@ -25,7 +25,12 @@ module physical_register_file (
 
     #[allow(missing_reset_statement)]
     always_ff {
-        if_reset {} else if write_valid {
+        if_reset {
+            // RISC-V 仕様で全アーキテクチャレジスタの初期値は 0
+            for i in 0..PREG_COUNT {
+                mem[i] = 0;
+            }
+        } else if write_valid {
             mem[write_addr] = write_data;
         }
     }
