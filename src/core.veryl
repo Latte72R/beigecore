@@ -17,6 +17,11 @@ module core (
         expt       : ExceptionInfo,
         pred_taken : logic        ,
         pred_target: Addr         ,
+        rs1_preg   : PhysReg      ,
+        rs2_preg   : PhysReg      ,
+        rd_preg    : PhysReg      ,
+        rd_old_preg: PhysReg      ,
+
     }
 
     struct memq_type {
@@ -148,6 +153,42 @@ module core (
         ctrl  : ids_ctrl       ,
         imm   : ids_imm        ,
     );
+
+    let ids_rd_areg   : ArchReg = ids_inst_bits[11:7];
+    let ids_rs1_areg  : ArchReg = ids_inst_bits[19:15];
+    let ids_rs2_areg  : ArchReg = ids_inst_bits[24:20];
+    let ids_need_alloc: logic   = ids_fire && ids_ctrl.rwb_en && ids_rd_areg != 0;
+
+    var flist_rready: logic  ;
+    var flist_rvalid: logic  ;
+    var flist_rdata : PhysReg;
+    var flist_wready: logic  ;
+    var flist_wvalid: logic  ;
+    var flist_wdata : PhysReg;
+
+    var rat_read1_data : PhysReg;
+    var rat_read2_data : PhysReg;
+    var rat_read1_addr : ArchReg;
+    var rat_read2_addr : ArchReg;
+    var rat_write_old  : PhysReg;
+    var rat_write_valid: logic  ;
+    var rat_write_addr : ArchReg;
+    var rat_write_data : PhysReg;
+
+    var rat_flush: logic;
+
+    let ids_new_preg: PhysReg = flist_rdata;
+    let ids_old_preg: PhysReg = rat_write_old;
+
+    always_comb {
+        flist_rready    = ids_need_alloc;
+        rat_read1_addr  = ids_rs1_areg;
+        rat_read2_addr  = ids_rs2_areg;
+        rat_write_valid = ids_need_alloc;
+        rat_write_addr  = ids_rd_areg;
+        rat_write_data  = ids_new_preg;
+        rat_flush       = control_hazard;
+    }
 
     var csru_priv_mode: PrivMode;
 
@@ -910,5 +951,30 @@ module core (
         query2_tag : rob_query2_tag ,
         query2_done: rob_query2_done,
         query2_data: rob_query2_data,
+    );
+
+    inst flist: free_list (
+        clk                 ,
+        rst                 ,
+        rready: flist_rready,
+        rvalid: flist_rvalid,
+        rdata : flist_rdata ,
+        wready: flist_wready,
+        wvalid: flist_wvalid,
+        wdata : flist_wdata ,
+    );
+
+    inst rat: register_alias_table (
+        clk                         ,
+        rst                         ,
+        flush      : rat_flush      ,
+        read1_addr : rat_read1_addr ,
+        read1_data : rat_read1_data ,
+        read2_addr : rat_read2_addr ,
+        read2_data : rat_read2_data ,
+        write_valid: rat_write_valid,
+        write_addr : rat_write_addr ,
+        write_data : rat_write_data ,
+        write_old  : rat_write_old  ,
     );
 }
