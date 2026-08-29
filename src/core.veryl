@@ -21,7 +21,6 @@ module core (
         rs2_preg   : PhysReg      ,
         rd_preg    : PhysReg      ,
         rd_old_preg: PhysReg      ,
-
     }
 
     struct memq_type {
@@ -205,6 +204,11 @@ module core (
         exq_wdata.pred_taken  = ids_pred_taken;
         exq_wdata.pred_target = ids_pred_target;
 
+        exq_wdata.rs1_preg    = rat_read1_data;
+        exq_wdata.rs2_preg    = rat_read2_data;
+        exq_wdata.rd_preg     = ids_new_preg;
+        exq_wdata.rd_old_preg = ids_old_preg;
+
         // exception
         exq_wdata.expt = 0;
         if !ids_inst_valid {
@@ -378,12 +382,13 @@ module core (
         || exq_rdata.expt.valid;
 
     always_comb {
-        rob_allocate_done         = !exs_needs_mem;
-        rob_allocate_data.addr    = exq_rdata.addr;
-        rob_allocate_data.bits    = exq_rdata.bits;
-        rob_allocate_data.ctrl    = exq_rdata.ctrl;
-        rob_allocate_data.rd_areg = exq_rdata.bits[11:7];
-        rob_allocate_data.result  = switch {
+        rob_allocate_done          = !exs_needs_mem;
+        rob_allocate_data.addr     = exq_rdata.addr;
+        rob_allocate_data.bits     = exq_rdata.bits;
+        rob_allocate_data.ctrl     = exq_rdata.ctrl;
+        rob_allocate_data.rd_areg  = exq_rdata.bits[11:7];
+        rob_allocate_data.old_preg = exq_rdata.rd_old_preg;
+        rob_allocate_data.result   = switch {
             exs_ctrl.is_lui   : exq_rdata.imm,
             exs_ctrl.is_muldiv: exs_muldiv_result,
             default           : exs_alu_result,
@@ -622,10 +627,13 @@ module core (
         }
     }
 
+    // ROB先頭命令が実際にコミットされた
+    let rob_commit_fire: logic = rob_commit_valid && rob_commit_ready && rob_commit_data.ctrl.rwb_en
+        && rob_commit_data.rd_areg != 0 && !rob_commit_data.raise_trap;
+
     always_ff {
         // ROB先頭が完成済み & コミットが成立 & レジスタ書込み命令 & x0ではない & trapではない
-        if rob_commit_valid && rob_commit_ready && rob_commit_data.ctrl.rwb_en && rob_commit_data.rd_areg != 0
-            && !rob_commit_data.raise_trap {
+        if rob_commit_fire {
             regfile[rob_commit_data.rd_areg] = rob_commit_data.result;
         }
     }
@@ -633,12 +641,12 @@ module core (
     always_comb {
         // WB -> END
         rob_commit_ready = 1;
+
+        flist_wvalid = rob_commit_fire;
+        flist_wdata  = rob_commit_data.old_preg;
     }
 
     ///////////////////////////////// Pending Writes /////////////////////////////////
-
-    // ROB先頭命令が実際にコミットされた
-    let rob_commit_fire: logic = rob_commit_valid && rob_commit_ready;
 
     let producer_commit: logic = rob_commit_fire && rob_commit_data.ctrl.rwb_en && rob_commit_data.rd_areg != 0;
 
