@@ -1,0 +1,32 @@
+import eei::*;
+
+module physical_register_file (
+    clk: input clock,
+    rst: input reset,
+
+    // 読み出し
+    read1_addr: input  PhysReg,
+    read1_data: output UIntX  ,
+    read2_addr: input  PhysReg,
+    read2_data: output UIntX  ,
+
+    // 書き込み
+    write_valid: input logic  ,
+    write_addr : input PhysReg,
+    write_data : input UIntX  ,
+) {
+    #[sv("syn_ramstyle=\"registers\"")]
+    var mem: UIntX [PRF_ENTRY_COUNT];
+
+    always_comb {
+        read1_data = mem[read1_addr];
+        read2_data = mem[read2_addr];
+    }
+
+    #[allow(missing_reset_statement)]
+    always_ff {
+        if_reset {} else if write_valid {
+            mem[write_addr] = write_data;
+        }
+    }
+}

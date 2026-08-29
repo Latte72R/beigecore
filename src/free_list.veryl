@@ -1,0 +1,43 @@
+import eei::*;
+
+module free_list (
+    clk: input clock,
+    rst: input reset,
+
+    rready: input  logic,
+    rvalid: output logic,
+    rdata : output logic,
+    wready: output logic,
+    wvalid: input  logic,
+    wdata : input  logic,
+) {
+    var head: PhysReg;
+    var tail: PhysReg;
+    let full: logic   = (tail + 1) == head;
+    let pop : logic   = rready && rvalid;
+
+    #[sv("syn_ramstyle=\"registers\"")]
+    var mem: logic [PRF_ENTRY_COUNT];
+
+    always_comb {
+        rvalid = head != tail;
+        rdata  = mem[head];
+        wready = !full || pop; // 1要素を書き込める
+    }
+
+    #[allow(missing_reset_statement)]
+    always_ff {
+        if_reset {
+            head = 0;
+            tail = 0;
+        } else {
+            if wready && wvalid {
+                mem[tail] = wdata;
+                tail      = tail + 1;
+            }
+            if rready && rvalid {
+                head = head + 1;
+            }
+        }
+    }
+}

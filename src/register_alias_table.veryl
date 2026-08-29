@@ -1,0 +1,42 @@
+// Register Alias Table
+// Architectural-to-physical register mapping, 2 read / 1 write
+
+import eei::*;
+
+module register_alias_table (
+    clk  : input clock,
+    rst  : input reset,
+    flush: input logic,
+
+    // 読み出し
+    read1_addr: input  ArchReg, // rs1
+    read1_data: output PhysReg, // phys_rs1
+
+    read2_addr: input  ArchReg, // rs2
+    read2_data: output PhysReg, // phys_rs2
+
+    // 書き込み + 旧値キャプチャ
+    write_valid: input  logic  ,
+    write_addr : input  ArchReg, // rd
+    write_data : input  PhysReg, // new_phys (rename) or old_phys (rollback)
+    write_old  : output PhysReg, // 書き込み前の値 (rename 時 ROB に格納)
+) {
+    #[sv("syn_ramstyle=\"registers\"")]
+    var mem: PhysReg [ARCH_REG_COUNT];
+
+    always_comb {
+        read1_data = mem[read1_addr];
+        read2_data = mem[read2_addr];
+        write_old  = mem[write_addr];
+    }
+
+    always_ff {
+        if_reset {
+            for i in 0..ARCH_REG_COUNT {
+                mem[i] = i as PhysReg; // x_i → p_i
+            }
+        } else if write_valid {
+            mem[write_addr] = write_data;
+        }
+    }
+}
