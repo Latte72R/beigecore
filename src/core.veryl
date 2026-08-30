@@ -218,6 +218,8 @@ module core (
     var mdu_read1_data : UIntX  ;
     var mdu_read2_addr : PhysReg;
     var mdu_read2_data : UIntX  ;
+    var csru_read_addr : PhysReg;
+    var csru_read_data : UIntX  ;
 
     var alu_write_valid : logic  ;
     var alu_write_addr  : PhysReg;
@@ -228,9 +230,9 @@ module core (
     var mdu_write_valid : logic  ;
     var mdu_write_addr  : PhysReg;
     var mdu_write_data  : UIntX  ;
-    var csr_write_valid : logic  ;
-    var csr_write_addr  : PhysReg;
-    var csr_write_data  : UIntX  ;
+    var csru_write_valid: logic  ;
+    var csru_write_addr : PhysReg;
+    var csru_write_data : UIntX  ;
 
     var aluq_wready: logic   ;
     var aluq_wvalid: logic   ;
@@ -238,6 +240,7 @@ module core (
     var aluq_rvalid: logic   ;
     var aluq_wdata : euq_type;
     var aluq_rdata : euq_type;
+    var aluq_grant : logic   ;
 
     var memq_wready: logic   ;
     var memq_wvalid: logic   ;
@@ -245,6 +248,7 @@ module core (
     var memq_rvalid: logic   ;
     var memq_wdata : euq_type;
     var memq_rdata : euq_type;
+    var memq_grant : logic   ;
 
     var muldivq_wready: logic   ;
     var muldivq_wvalid: logic   ;
@@ -252,6 +256,7 @@ module core (
     var muldivq_rvalid: logic   ;
     var muldivq_wdata : euq_type;
     var muldivq_rdata : euq_type;
+    var muldivq_grant : logic   ;
 
     var csrq_wready: logic   ;
     var csrq_wvalid: logic   ;
@@ -259,6 +264,7 @@ module core (
     var csrq_rvalid: logic   ;
     var csrq_wdata : euq_type;
     var csrq_rdata : euq_type;
+    var csrq_grant : logic   ;
 
     // dispatch: 命令種別に応じて該当キューに格納
     let ids_is_alu   : logic = !inst_is_memop(ids_ctrl) && !ids_ctrl.is_muldiv && !ids_ctrl.is_csr;
@@ -282,7 +288,7 @@ module core (
             ids_is_csr   : csrq_wready,
             default      : 1,
         };
-        i_membus.rready = rob_allocate_ready && ids_target_ready;
+        i_membus.rready = !serial_pending && rob_allocate_ready && ids_target_ready;
 
         // exception
         exq_wdata.expt = 0;
@@ -372,6 +378,7 @@ module core (
         memu_read2_addr = memq_rdata.rs2_preg;
         mdu_read1_addr  = muldivq_rdata.rs1_preg;
         mdu_read2_addr  = muldivq_rdata.rs2_preg;
+        csru_read_addr  = csrq_rdata.rs1_preg;
     }
 
     let exs_valid    : logic    = exq_rvalid;
@@ -769,7 +776,7 @@ module core (
 
     // CSR execution
     let csrq_at_head: logic = csrq_rvalid && rob_head_valid && rob_head_tag == csrq_rdata.rob_tag;
-    let csrq_result : UIntX = 0;
+    let csrq_result : UIntX = csru_rdata;
 
     inst memu: memunit (
         clk   : clk                             ,
@@ -783,33 +790,35 @@ module core (
         membus: d_membus                        ,
     );
 
-    // inst csru: csrunit (
-    //     clk                                        ,
-    //     rst                                        ,
-    //     valid      : mems_valid && mems_can_execute,
-    //     pc         : mems_pc                       ,
-    //     inst_bits  : mems_inst_bits                ,
-    //     ctrl       : mems_ctrl                     ,
-    //     expt_info  : mems_expt                     ,
-    //     rd_areg    : mems_rd_areg                  ,
-    //     csr_addr   : mems_inst_bits[31:20]         ,
-    //     rs1_areg   : csrq_rdata.rs1_areg           ,
-    //     rs1_data   : csrq_rdata.rs1_data           ,
-    //     can_intr   : mems_can_intr                 ,
-    //     rdata      : csru_rdata                    ,
-    //     mode       : csru_priv_mode                ,
-    //     raise_trap : csru_raise_trap               ,
-    //     trap_vector: csru_trap_vector              ,
-    //     trap_return: csru_trap_return              ,
-    //     minstret                                   ,
-    //     led                                        ,
-    //     aclint                                     ,
-    // );
+    inst csru: csrunit (
+        clk                                ,
+        rst                                ,
+        valid      : csrq_grant            ,
+        pc         : csrq_rdata.addr       ,
+        inst_bits  : csrq_rdata.bits       ,
+        ctrl       : csrq_rdata.ctrl       ,
+        expt_info  : csrq_rdata.expt       ,
+        rd_areg    : csrq_rdata.bits[11:7] ,
+        csr_addr   : csrq_rdata.bits[31:20],
+        rs1_areg   : csrq_rdata.bits[19:15],
+        rs1_data   : csru_read_data        ,
+        can_intr   : 0                     , // 当面は割り込みなし
+        rdata      : csru_rdata            ,
+        mode       : csru_priv_mode        ,
+        raise_trap : csru_raise_trap       ,
+        trap_vector: csru_trap_vector      ,
+        trap_return: csru_trap_return      ,
+        minstret                           ,
+        led                                ,
+        aclint                             ,
+    );
 
-    // Completion arbitration: MEM > CSR > ALU
-    let memq_grant: logic = memq_done;
-    let csrq_grant: logic = csrq_at_head && !memq_done;
-    let aluq_grant: logic = aluq_rvalid && !memq_done && !csrq_at_head;
+    always_comb {
+        // Completion arbitration: MEM > CSR > ALU
+        memq_grant = memq_done;
+        csrq_grant = csrq_at_head && !memq_done;
+        aluq_grant = aluq_rvalid && !memq_done && !csrq_at_head;
+    }
 
     always_comb {
         // MEM -> WB
@@ -866,25 +875,26 @@ module core (
             csrq_grant: csrq_rdata.expt,
             default   : 0,
         };
-        rob_complete_data.raise_trap = 0;
+        rob_complete_data.raise_trap = csrq_grant && csru_raise_trap && !csru_trap_return;
 
         memu_write_valid = memq_done && memq_rdata.ctrl.is_load;
         memu_write_addr  = memq_rdata.rd_preg;
         memu_write_data  = memu_rdata;
 
-        csr_write_valid = csrq_grant && csrq_rdata.ctrl.rwb_en && csrq_rdata.bits[11:7] != 0;
-        csr_write_addr  = csrq_rdata.rd_preg;
-        csr_write_data  = csrq_result;
+        csru_write_valid = csrq_grant && csrq_rdata.ctrl.rwb_en && csrq_rdata.bits[11:7] != 0;
+        csru_write_addr  = csrq_rdata.rd_preg;
+        csru_write_data  = csrq_result;
     }
 
     always_comb {
-        control_hazard   = aluq_complete && aluq_mispredict;
-        let aluq_recovery_pc: Addr = switch {
+        let csr_control_hazard: logic = csrq_grant && csru_raise_trap;
+        control_hazard     = (aluq_complete && aluq_mispredict) || csr_control_hazard;
+        let aluq_recovery_pc  : Addr = switch {
             aluq_is_jalr: (aluq_result & ~1),
             aluq_br_take: (aluq_rdata.addr + aluq_rdata.imm),
             default     : (aluq_rdata.addr + (if aluq_rdata.ctrl.is_rvc ? 2 : 4))
         };
-        control_hazard_pc_next = if aluq_mispredict ? aluq_recovery_pc : csru_trap_vector;
+        control_hazard_pc_next = if csr_control_hazard ? csru_trap_vector : aluq_recovery_pc;
     }
 
     ///////////////////////////////// WB Stage /////////////////////////////////
@@ -914,15 +924,15 @@ module core (
             regfile[rob_commit_data.rd_areg] = rob_commit_data.result;
         }
     }
-
-    // set: 分岐/ジャンプを dispatch した時
-    // clear: 分岐/ジャンプが commit した時
+    // serial_pending := 制御結果がまだ確定していない命令が存在する
     always_ff {
         if_reset {
             serial_pending = 0;
-        } else if rob_commit_fire && (wbs_ctrl.is_jump || inst_is_br(wbs_ctrl)) {
+        } else if control_hazard {
             serial_pending = 0;
-        } else if ids_fire && (ids_ctrl.is_jump || inst_is_br(ids_ctrl)) {
+        } else if aluq_complete && (aluq_rdata.ctrl.is_jump || inst_is_br(aluq_rdata.ctrl)) || csrq_grant {
+            serial_pending = 0;
+        } else if ids_fire && (ids_ctrl.is_jump || inst_is_br(ids_ctrl) || ids_ctrl.is_csr) {
             serial_pending = 1;
         }
     }
@@ -1350,6 +1360,8 @@ module core (
         read5_data  : mdu_read1_data  ,
         read6_addr  : mdu_read2_addr  ,
         read6_data  : mdu_read2_data  ,
+        read7_addr  : csru_read_addr  ,
+        read7_data  : csru_read_data  ,
         write1_valid: alu_write_valid ,
         write1_addr : alu_write_addr  ,
         write1_data : alu_write_data  ,
@@ -1359,8 +1371,8 @@ module core (
         write3_valid: mdu_write_valid ,
         write3_addr : mdu_write_addr  ,
         write3_data : mdu_write_data  ,
-        write4_valid: csr_write_valid ,
-        write4_addr : csr_write_addr  ,
-        write4_data : csr_write_data  ,
+        write4_valid: csru_write_valid,
+        write4_addr : csru_write_addr ,
+        write4_data : csru_write_data ,
     );
 }

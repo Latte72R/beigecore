@@ -17,6 +17,8 @@ module physical_register_file (
     read5_data: output UIntX  ,
     read6_addr: input  PhysReg,
     read6_data: output UIntX  ,
+    read7_addr: input  PhysReg,
+    read7_data: output UIntX  ,
 
     // 書き込み
     write1_valid: input logic  ,
@@ -42,6 +44,7 @@ module physical_register_file (
         read4_data = mem[read4_addr];
         read5_data = mem[read5_addr];
         read6_data = mem[read6_addr];
+        read7_data = mem[read7_addr];
     }
 
     #[allow(missing_reset_statement)]
