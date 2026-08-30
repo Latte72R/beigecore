@@ -9,11 +9,28 @@ module physical_register_file (
     read1_data: output UIntX  ,
     read2_addr: input  PhysReg,
     read2_data: output UIntX  ,
+    read3_addr: input  PhysReg,
+    read3_data: output UIntX  ,
+    read4_addr: input  PhysReg,
+    read4_data: output UIntX  ,
+    read5_addr: input  PhysReg,
+    read5_data: output UIntX  ,
+    read6_addr: input  PhysReg,
+    read6_data: output UIntX  ,
 
     // 書き込み
-    write_valid: input logic  ,
-    write_addr : input PhysReg,
-    write_data : input UIntX  ,
+    write1_valid: input logic  ,
+    write1_addr : input PhysReg,
+    write1_data : input UIntX  ,
+    write2_valid: input logic  ,
+    write2_addr : input PhysReg,
+    write2_data : input UIntX  ,
+    write3_valid: input logic  ,
+    write3_addr : input PhysReg,
+    write3_data : input UIntX  ,
+    write4_valid: input logic  ,
+    write4_addr : input PhysReg,
+    write4_data : input UIntX  ,
 ) {
     #[sv("syn_ramstyle=\"registers\"")]
     var mem: UIntX [PREG_COUNT];
@@ -21,6 +38,10 @@ module physical_register_file (
     always_comb {
         read1_data = mem[read1_addr];
         read2_data = mem[read2_addr];
+        read3_data = mem[read3_addr];
+        read4_data = mem[read4_addr];
+        read5_data = mem[read5_addr];
+        read6_data = mem[read6_addr];
     }
 
     #[allow(missing_reset_statement)]
@@ -30,8 +51,19 @@ module physical_register_file (
             for i in 0..PREG_COUNT {
                 mem[i] = 0;
             }
-        } else if write_valid {
-            mem[write_addr] = write_data;
+        } else {
+            if write1_valid {
+                mem[write1_addr] = write1_data;
+            }
+            if write2_valid {
+                mem[write2_addr] = write2_data;
+            }
+            if write3_valid {
+                mem[write3_addr] = write3_data;
+            }
+            if write4_valid {
+                mem[write4_addr] = write4_data;
+            }
         }
     }
 }
