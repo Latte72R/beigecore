@@ -75,9 +75,10 @@ module core (
     var rob_allocate_data : rob_entry_type;
     var rob_allocate_tag  : RobTag        ;
 
-    var rob_complete_valid: logic         ;
-    var rob_complete_tag  : RobTag        ;
-    var rob_complete_data : rob_entry_type;
+    var alu_complete_data : rob_entry_type;
+    var memu_complete_data: rob_entry_type;
+    var mdu_complete_data : rob_entry_type;
+    var csru_complete_data: rob_entry_type;
 
     var rob_commit_valid: logic         ;
     var rob_commit_ready: logic         ;
@@ -246,7 +247,6 @@ module core (
     var alu_wdata   : euq_type;
     var alu_rdata   : euq_type;
     var alu_grant   : logic   ;
-    var alu_done    : logic   ;
     var alu_complete: logic   ;
 
     var memu_wready  : logic   ;
@@ -256,7 +256,6 @@ module core (
     var memu_wdata   : euq_type;
     var memu_rdata   : euq_type;
     var memu_grant   : logic   ;
-    var memu_done    : logic   ;
     var memu_complete: logic   ;
 
     var mdu_wready  : logic   ;
@@ -266,7 +265,6 @@ module core (
     var mdu_wdata   : euq_type;
     var mdu_rdata   : euq_type;
     var mdu_grant   : logic   ;
-    var mdu_done    : logic   ;
     var mdu_complete: logic   ;
 
     var csru_wready  : logic   ;
@@ -276,7 +274,6 @@ module core (
     var csru_wdata   : euq_type;
     var csru_rdata   : euq_type;
     var csru_grant   : logic   ;
-    var csru_done    : logic   ;
     var csru_complete: logic   ;
 
     always_ff {
@@ -612,30 +609,21 @@ module core (
         && (!mdu_rdata.uses_rs2 || !prf_busy[mdu_rdata.rs2_preg]);
 
     always_comb {
-        // Completion arbitration: MEM > MDU > CSR > ALU
         // MEMはROB先頭かつoperand readyなら実行開始・継続
         memu_grant = memu_at_head && memu_sources_ready;
         // MDUはMDUがidleなら実行開始・継続
-        mdu_grant = mdu_rvalid && mdu_sources_ready && mdu_ready && !mdu_busy && !memu_grant;
+        mdu_grant = mdu_rvalid && mdu_sources_ready && mdu_ready && !mdu_busy;
         // CSRはROB先頭かつoperand readyなら実行
-        csru_grant = csru_at_head && csru_sources_ready && !mdu_grant;
+        csru_grant = csru_at_head && csru_sources_ready;
         // ALUは(fence_iでないまたはROB先頭)かつoperand readyなら実行開始・継続
-        alu_grant = alu_rvalid && alu_sources_ready && (!alu_is_fence_i || alu_at_head) && !csru_grant;
+        alu_grant = alu_rvalid && alu_sources_ready && (!alu_is_fence_i || alu_at_head);
     }
 
     always_comb {
-        // 優先順位: MEM > MDU > CSR > ALU
-        memu_complete = memu_done;
-        mdu_complete  = mdu_done && !memu_complete;
-        csru_complete = csru_done && !memu_complete && !mdu_complete;
-        alu_complete  = alu_done && !memu_complete && !mdu_complete && !csru_complete;
-    }
-
-    always_comb {
-        alu_done  = alu_grant;
-        csru_done = csru_grant;
-        mdu_done  = mdu_busy && mdu_result_valid;
-        memu_done = memu_grant && !memu_stall;
+        alu_complete  = alu_grant;
+        csru_complete = csru_grant;
+        mdu_complete  = mdu_busy && mdu_result_valid;
+        memu_complete = memu_grant && !memu_stall;
     }
 
     always_comb {
@@ -644,65 +632,6 @@ module core (
         memu_rready = memu_complete;
         mdu_rready  = mdu_complete;
         csru_rready = csru_complete;
-
-        rob_complete_valid = alu_complete || memu_complete || mdu_complete || csru_complete;
-        rob_complete_tag   = switch {
-            alu_complete : alu_rdata.rob_tag,
-            memu_complete: memu_rdata.rob_tag,
-            mdu_complete : mdu_rdata.rob_tag,
-            csru_complete: csru_rdata.rob_tag,
-            default      : 0,
-        };
-        rob_complete_data.addr = switch {
-            alu_complete : alu_rdata.addr,
-            memu_complete: memu_rdata.addr,
-            mdu_complete : mdu_rdata.addr,
-            csru_complete: csru_rdata.addr,
-            default      : 0
-        };
-        rob_complete_data.bits = switch {
-            alu_complete : alu_rdata.bits,
-            memu_complete: memu_rdata.bits,
-            mdu_complete : mdu_rdata.bits,
-            csru_complete: csru_rdata.bits,
-            default      : 0
-        };
-        rob_complete_data.ctrl = switch {
-            alu_complete : alu_rdata.ctrl,
-            memu_complete: memu_rdata.ctrl,
-            mdu_complete : mdu_rdata.ctrl,
-            csru_complete: csru_rdata.ctrl,
-            default      : 0
-        };
-        rob_complete_data.rd_areg = switch {
-            alu_complete : alu_rdata.bits[11:7],
-            memu_complete: memu_rdata.bits[11:7],
-            mdu_complete : mdu_rdata.bits[11:7],
-            csru_complete: csru_rdata.bits[11:7],
-            default      : 0
-        };
-        rob_complete_data.old_preg = switch {
-            alu_complete : alu_rdata.old_preg,
-            memu_complete: memu_rdata.old_preg,
-            mdu_complete : mdu_rdata.old_preg,
-            csru_complete: csru_rdata.old_preg,
-            default      : 0
-        };
-        rob_complete_data.result = switch {
-            alu_complete : alu_writeback_data,
-            memu_complete: memu_result,
-            mdu_complete : mdu_result,
-            csru_complete: csru_result,
-            default      : 0,
-        };
-        rob_complete_data.expt = switch {
-            alu_complete : alu_rdata.expt,
-            memu_complete: memu_rdata.expt,
-            mdu_complete : mdu_rdata.expt,
-            csru_complete: csru_rdata.expt,
-            default      : 0,
-        };
-        rob_complete_data.raise_trap = csru_complete && csru_raise_trap && !csru_trap_return;
 
         memu_write_valid = memu_complete && memu_rdata.ctrl.is_load;
         memu_write_addr  = memu_rdata.rd_preg;
@@ -715,6 +644,42 @@ module core (
         mdu_write_valid = mdu_complete && mdu_rdata.ctrl.rwb_en && mdu_rdata.rd_preg != 0;
         mdu_write_addr  = mdu_rdata.rd_preg;
         mdu_write_data  = mdu_result;
+
+        alu_complete_data.addr       = alu_rdata.addr;
+        alu_complete_data.bits       = alu_rdata.bits;
+        alu_complete_data.ctrl       = alu_rdata.ctrl;
+        alu_complete_data.rd_areg    = alu_rdata.bits[11:7];
+        alu_complete_data.old_preg   = alu_rdata.old_preg;
+        alu_complete_data.result     = alu_writeback_data;
+        alu_complete_data.expt       = alu_rdata.expt;
+        alu_complete_data.raise_trap = 0;
+
+        memu_complete_data.addr       = memu_rdata.addr;
+        memu_complete_data.bits       = memu_rdata.bits;
+        memu_complete_data.ctrl       = memu_rdata.ctrl;
+        memu_complete_data.rd_areg    = memu_rdata.bits[11:7];
+        memu_complete_data.old_preg   = memu_rdata.old_preg;
+        memu_complete_data.result     = memu_result;
+        memu_complete_data.expt       = memu_rdata.expt;
+        memu_complete_data.raise_trap = 0;
+
+        mdu_complete_data.addr       = mdu_rdata.addr;
+        mdu_complete_data.bits       = mdu_rdata.bits;
+        mdu_complete_data.ctrl       = mdu_rdata.ctrl;
+        mdu_complete_data.rd_areg    = mdu_rdata.bits[11:7];
+        mdu_complete_data.old_preg   = mdu_rdata.old_preg;
+        mdu_complete_data.result     = mdu_result;
+        mdu_complete_data.expt       = mdu_rdata.expt;
+        mdu_complete_data.raise_trap = 0;
+
+        csru_complete_data.addr       = csru_rdata.addr;
+        csru_complete_data.bits       = csru_rdata.bits;
+        csru_complete_data.ctrl       = csru_rdata.ctrl;
+        csru_complete_data.rd_areg    = csru_rdata.bits[11:7];
+        csru_complete_data.old_preg   = csru_rdata.old_preg;
+        csru_complete_data.result     = csru_result;
+        csru_complete_data.expt       = csru_rdata.expt;
+        csru_complete_data.raise_trap = csru_raise_trap && !csru_trap_return;
     }
 
     always_comb {
@@ -787,18 +752,27 @@ module core (
                 if ids_fire {
                     $display("K\t%0d\tX\t%h\t%h\t%b", trace_cycle, ids_pc, ids_inst_bits, ids_ctrl.itype);
                 }
-                // if rob_allocate_fire {
-                //     $display(
-                //         "K\t%0d\tA\t%0d\t%h\t%h\t%b",
-                //         trace_cycle,
-                //         rob_allocate_tag,
-                //         exs_pc,
-                //         exs_inst_bits,
-                //         exs_needs_mem,
-                //     );
-                // }
-                if rob_complete_valid {
-                    $display("K\t%0d\tC\t%0d", trace_cycle, rob_complete_tag);
+                if rob_allocate_valid && rob_allocate_ready {
+                    $display(
+                        "K\t%0d\tA\t%0d\t%h\t%h\t%b",
+                        trace_cycle,
+                        rob_allocate_tag,
+                        ids_pc,
+                        ids_inst_bits,
+                        ids_is_load || ids_is_store,
+                    );
+                }
+                if alu_complete {
+                    $display("K\t%0d\tC\t%0d", trace_cycle, alu_rdata.rob_tag);
+                }
+                if memu_complete {
+                    $display("K\t%0d\tC\t%0d", trace_cycle, memu_rdata.rob_tag);
+                }
+                if mdu_complete {
+                    $display("K\t%0d\tC\t%0d", trace_cycle, mdu_rdata.rob_tag);
+                }
+                if csru_complete {
+                    $display("K\t%0d\tC\t%0d", trace_cycle, csru_rdata.rob_tag);
                 }
                 if rob_commit_fire {
                     $display(
@@ -930,9 +904,21 @@ module core (
         allocate_data : rob_allocate_data ,
         allocate_tag  : rob_allocate_tag  ,
 
-        complete_valid: rob_complete_valid,
-        complete_tag  : rob_complete_tag  ,
-        complete_data : rob_complete_data ,
+        complete0_valid: alu_complete     ,
+        complete0_tag  : alu_rdata.rob_tag,
+        complete0_data : alu_complete_data,
+
+        complete1_valid: memu_complete     ,
+        complete1_tag  : memu_rdata.rob_tag,
+        complete1_data : memu_complete_data,
+
+        complete2_valid: mdu_complete     ,
+        complete2_tag  : mdu_rdata.rob_tag,
+        complete2_data : mdu_complete_data,
+
+        complete3_valid: csru_complete     ,
+        complete3_tag  : csru_rdata.rob_tag,
+        complete3_data : csru_complete_data,
 
         commit_valid: rob_commit_valid,
         commit_ready: rob_commit_ready,
