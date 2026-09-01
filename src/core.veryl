@@ -92,6 +92,7 @@ module core (
     var control_hazard        : logic;
     var control_hazard_pc_next: Addr ;
     var fencei_redirect       : logic;
+    var backend_redirect      : logic;
 
     var prediction_redirect: logic;
     var ids_imm            : UIntX;
@@ -512,7 +513,7 @@ module core (
     always_ff {
         if_reset {
             mdu_busy = 0;
-        } else if control_hazard {
+        } else if backend_redirect {
             mdu_busy = 0;
         } else {
             if mdu_grant {
@@ -633,15 +634,15 @@ module core (
         mdu_rready  = mdu_complete;
         csru_rready = csru_complete;
 
-        memu_write_valid = memu_complete && memu_rdata.ctrl.is_load;
+        memu_write_valid = memu_complete && memu_rdata.ctrl.is_load && memu_rdata.bits[11:7] != 0;
         memu_write_addr  = memu_rdata.rd_preg;
         memu_write_data  = memu_result;
 
-        csru_write_valid = csru_complete && csru_rdata.ctrl.rwb_en && csru_rdata.rd_preg != 0;
+        csru_write_valid = csru_complete && csru_rdata.ctrl.rwb_en && csru_rdata.bits[11:7] != 0;
         csru_write_addr  = csru_rdata.rd_preg;
         csru_write_data  = csru_result;
 
-        mdu_write_valid = mdu_complete && mdu_rdata.ctrl.rwb_en && mdu_rdata.rd_preg != 0;
+        mdu_write_valid = mdu_complete && mdu_rdata.ctrl.rwb_en && mdu_rdata.bits[11:7] != 0;
         mdu_write_addr  = mdu_rdata.rd_preg;
         mdu_write_data  = mdu_result;
 
@@ -683,14 +684,18 @@ module core (
     }
 
     always_comb {
-        let csru_control_hazard: logic = csru_complete && csru_raise_trap;
-        control_hazard      = (alu_complete && alu_mispredict) || csru_control_hazard;
-        let alu_recovery_pc    : Addr = switch {
+        let alu_redirect: logic = alu_complete && alu_mispredict;
+        let csr_redirect: logic = csru_complete && csru_raise_trap;
+
+        control_hazard   = alu_redirect || csr_redirect;
+        backend_redirect = csr_redirect;
+
+        let alu_recovery_pc: Addr = switch {
             alu_is_jalr: (alu_result & ~1),
             alu_br_take: (alu_rdata.addr + alu_rdata.imm),
             default    : (alu_rdata.addr + (if alu_rdata.ctrl.is_rvc ? 2 : 4))
         };
-        control_hazard_pc_next = if csru_control_hazard ? csru_trap_vector : alu_recovery_pc;
+        control_hazard_pc_next = if csr_redirect ? csru_trap_vector : alu_recovery_pc;
     }
 
     ///////////////////////////////// WB Stage /////////////////////////////////
@@ -833,60 +838,60 @@ module core (
         DATA_TYPE: euq_type,
         WIDTH    : 3       ,
     ) (
-        clk                   ,
-        rst                   ,
-        flush : control_hazard,
-        wready: alu_wready    ,
-        wvalid: alu_wvalid    ,
-        wdata : alu_wdata     ,
-        rready: alu_rready    ,
-        rvalid: alu_rvalid    ,
-        rdata : alu_rdata     ,
+        clk                     ,
+        rst                     ,
+        flush : backend_redirect,
+        wready: alu_wready      ,
+        wvalid: alu_wvalid      ,
+        wdata : alu_wdata       ,
+        rready: alu_rready      ,
+        rvalid: alu_rvalid      ,
+        rdata : alu_rdata       ,
     );
 
     inst memq: fifo #(
         DATA_TYPE: euq_type,
         WIDTH    : 3       ,
     ) (
-        clk                   ,
-        rst                   ,
-        flush : control_hazard,
-        wready: memu_wready   ,
-        wvalid: memu_wvalid   ,
-        wdata : memu_wdata    ,
-        rready: memu_rready   ,
-        rvalid: memu_rvalid   ,
-        rdata : memu_rdata    ,
+        clk                     ,
+        rst                     ,
+        flush : backend_redirect,
+        wready: memu_wready     ,
+        wvalid: memu_wvalid     ,
+        wdata : memu_wdata      ,
+        rready: memu_rready     ,
+        rvalid: memu_rvalid     ,
+        rdata : memu_rdata      ,
     );
 
     inst muldivq: fifo #(
         DATA_TYPE: euq_type,
         WIDTH    : 3       ,
     ) (
-        clk                   ,
-        rst                   ,
-        flush : control_hazard,
-        wready: mdu_wready    ,
-        wvalid: mdu_wvalid    ,
-        wdata : mdu_wdata     ,
-        rready: mdu_rready    ,
-        rvalid: mdu_rvalid    ,
-        rdata : mdu_rdata     ,
+        clk                     ,
+        rst                     ,
+        flush : backend_redirect,
+        wready: mdu_wready      ,
+        wvalid: mdu_wvalid      ,
+        wdata : mdu_wdata       ,
+        rready: mdu_rready      ,
+        rvalid: mdu_rvalid      ,
+        rdata : mdu_rdata       ,
     );
 
     inst csrq: fifo #(
         DATA_TYPE: euq_type,
         WIDTH    : 3       ,
     ) (
-        clk                   ,
-        rst                   ,
-        flush : control_hazard,
-        wready: csru_wready   ,
-        wvalid: csru_wvalid   ,
-        wdata : csru_wdata    ,
-        rready: csru_rready   ,
-        rvalid: csru_rvalid   ,
-        rdata : csru_rdata    ,
+        clk                     ,
+        rst                     ,
+        flush : backend_redirect,
+        wready: csru_wready     ,
+        wvalid: csru_wvalid     ,
+        wdata : csru_wdata      ,
+        rready: csru_rready     ,
+        rvalid: csru_rvalid     ,
+        rdata : csru_rdata      ,
     );
 
     inst rob: reorder_buffer #(
@@ -896,7 +901,7 @@ module core (
         clk  ,
         rst  ,
         // トラップはROB先頭でのみ受理するため、ここで全破棄できる
-        flush: control_hazard,
+        flush: backend_redirect,
 
         allocate_valid: rob_allocate_valid,
         allocate_ready: rob_allocate_ready,
