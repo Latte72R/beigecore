@@ -26,14 +26,6 @@ module reorder_buffer #(
     // head の情報（Storeの先頭判定につかう）
     head_valid: output logic       ,
     head_tag  : output logic<WIDTH>,
-
-    // rs1/rs2の依存解決のためにROBの中身を覗く
-    query1_tag : input  logic    <WIDTH>,
-    query1_done: output logic           ,
-    query1_data: output DATA_TYPE       ,
-    query2_tag : input  logic    <WIDTH>,
-    query2_done: output logic           ,
-    query2_data: output DATA_TYPE       ,
 ) {
     if WIDTH <= 1 :invalid_width {
         initial {
@@ -65,12 +57,6 @@ module reorder_buffer #(
             // allocate
             allocate_ready = !full || commit_fire;
             allocate_tag   = tail;
-
-            // query
-            query1_done = completed[query1_tag];
-            query1_data = mem[query1_tag];
-            query2_done = completed[query2_tag];
-            query2_data = mem[query2_tag];
         }
 
         #[allow(missing_reset_statement)]

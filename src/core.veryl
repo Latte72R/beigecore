@@ -68,22 +68,6 @@ module core (
         raise_trap: logic        ,
     }
 
-    // ID -> EXのFIFO
-    var exq_wready: logic   ;
-    var exq_wvalid: logic   ;
-    var exq_wdata : exq_type;
-    var exq_rready: logic   ;
-    var exq_rvalid: logic   ;
-    var exq_rdata : exq_type;
-
-    // EX -> MEMのFIFO
-    // var memq_wready: logic    ;
-    // var memq_wvalid: logic;
-    // var memq_wdata : memq_type;
-    // var memq_rready: logic    ;
-    // var memq_rvalid: logic;
-    // var memq_rdata : memq_type;
-
     // (EX, MEM) -> WB の Reorder Buffer
     var rob_allocate_valid: logic         ;
     var rob_allocate_ready: logic         ;
@@ -102,12 +86,12 @@ module core (
     var rob_head_valid: logic ;
     var rob_head_tag  : RobTag;
 
-    var rob_query1_tag : RobTag        ;
-    var rob_query1_done: logic         ;
-    var rob_query1_data: rob_entry_type;
-    var rob_query2_tag : RobTag        ;
-    var rob_query2_done: logic         ;
-    var rob_query2_data: rob_entry_type;
+    // var rob_query1_tag : RobTag        ;
+    // var rob_query1_done: logic         ;
+    // var rob_query1_data: rob_entry_type;
+    // var rob_query2_tag : RobTag        ;
+    // var rob_query2_done: logic         ;
+    // var rob_query2_data: rob_entry_type;
 
     ///////////////////////////////// IF Stage /////////////////////////////////
 
@@ -138,9 +122,10 @@ module core (
     let ids_valid     = i_membus.rvalid;
     let ids_inst_bits = i_membus.rdata;
 
-    let ids_fire      : logic    = !control_hazard && i_membus.rvalid && i_membus.rready;
-    var ids_inst_valid: logic   ;
-    var ids_ctrl      : InstCtrl;
+    let ids_fire      : logic         = !control_hazard && i_membus.rvalid && i_membus.rready;
+    var ids_inst_valid: logic        ;
+    var ids_ctrl      : InstCtrl     ;
+    var ids_expt      : ExceptionInfo;
 
     var bimodal_pred_taken: logic;
     var bimodal_pred_valid: logic;
@@ -158,6 +143,7 @@ module core (
         && (ids_is_jal || (ids_is_jalr && btb_hit) || (inst_is_br(ids_ctrl) && ids_branch_pred_taken));
 
     let ids_pc: Addr = i_membus.raddr;
+
     always_comb {
         prediction_redirect = !control_hazard && ids_fire && ids_pred_taken;
         ids_pred_target     = if ids_is_jalr ? btb_target : ids_pc + ids_imm;
@@ -344,26 +330,6 @@ module core (
         };
         i_membus.rready = !serial_pending && rob_allocate_ready && ids_target_ready && ids_preg_ready;
 
-        // exception
-        exq_wdata.expt = 0;
-        if !ids_inst_valid {
-            // illegal instruction
-            exq_wdata.expt.valid = 1;
-            exq_wdata.expt.cause = CsrCause::ILLEGAL_INSTRUCTION;
-            exq_wdata.expt.value = {1'b0 repeat XLEN - ILEN, ids_inst_bits};
-        } else if ids_inst_bits == 32'h00000073 {
-            // ECALL
-            exq_wdata.expt.valid      = 1;
-            exq_wdata.expt.cause      = CsrCause::ENVIRONMENT_CALL_FROM_U_MODE;
-            exq_wdata.expt.cause[1:0] = csru_priv_mode; // adjust mode
-            exq_wdata.expt.value      = 0;
-        } else if ids_inst_bits == 32'h00100073 {
-            // EBREAK
-            exq_wdata.expt.valid = 1;
-            exq_wdata.expt.cause = CsrCause::BREAKPOINT;
-            exq_wdata.expt.value = ids_pc;
-        }
-
         // 該当キューの wvalid / wdata を駆動
         aluq_wvalid = ids_fire && ids_is_alu && aluq_wready;
         memq_wvalid = ids_fire && (ids_is_load || ids_is_store) && memq_wready;
@@ -375,7 +341,7 @@ module core (
         dispatch_data.bits        = ids_inst_bits;
         dispatch_data.ctrl        = ids_ctrl;
         dispatch_data.imm         = ids_imm;
-        dispatch_data.expt        = exq_wdata.expt; // 既存の例外検出ロジックの結果
+        dispatch_data.expt        = ids_expt;
         dispatch_data.rs1_preg    = rat_read1_data;
         dispatch_data.rs2_preg    = rat_read2_data;
         dispatch_data.rd_preg     = ids_new_preg;
@@ -400,29 +366,31 @@ module core (
         rob_allocate_data.ctrl       = ids_ctrl;
         rob_allocate_data.rd_areg    = ids_rd_areg;
         rob_allocate_data.old_preg   = ids_old_preg;
-        rob_allocate_data.result     = 0; // 後で complete 時に上書き
-        rob_allocate_data.expt       = exq_wdata.expt;
+        rob_allocate_data.result     = 0; // complete 時に上書き
+        rob_allocate_data.expt       = ids_expt;
         rob_allocate_data.raise_trap = 0;
     }
 
     always_comb {
-        // ID -> EX
-        // i_membus.rready = exq_wready;
-        // exq_wvalid = i_membus.rvalid;
-        exq_wvalid = 0;
-
-        // exq_wdata.addr = i_membus.raddr;
-        // exq_wdata.bits = i_membus.rdata;
-        // exq_wdata.ctrl = ids_ctrl;
-        // exq_wdata.imm  = ids_imm;
-
-        // exq_wdata.pred_taken  = ids_pred_taken;
-        // exq_wdata.pred_target = ids_pred_target;
-
-        // exq_wdata.rs1_preg    = rat_read1_data;
-        // exq_wdata.rs2_preg    = rat_read2_data;
-        // exq_wdata.rd_preg     = ids_new_preg;
-        // exq_wdata.rd_old_preg = ids_old_preg;
+        // exception
+        if !ids_inst_valid {
+            ids_expt.valid = 1;
+            ids_expt.cause = CsrCause::ILLEGAL_INSTRUCTION;
+            ids_expt.value = {1'b0 repeat XLEN - ILEN, ids_inst_bits};
+        } else if ids_inst_bits == 32'h00000073 {
+            // ECALL
+            ids_expt.valid      = 1;
+            ids_expt.cause      = CsrCause::ENVIRONMENT_CALL_FROM_U_MODE;
+            ids_expt.cause[1:0] = csru_priv_mode;
+            ids_expt.value      = 0;
+        } else if ids_inst_bits == 32'h00100073 {
+            // EBREAK
+            ids_expt.valid = 1;
+            ids_expt.cause = CsrCause::BREAKPOINT;
+            ids_expt.value = ids_pc;
+        } else {
+            ids_expt = 0;
+        }
     }
 
     ///////////////////////////////// EX Stage /////////////////////////////////
@@ -437,81 +405,8 @@ module core (
         csru_read_addr  = csrq_rdata.rs1_preg;
     }
 
-    let exs_valid    : logic    = exq_rvalid;
-    let exs_pc       : Addr     = exq_rdata.addr;
-    let exs_inst_bits: Inst     = exq_rdata.bits;
-    let exs_ctrl     : InstCtrl = exq_rdata.ctrl;
-    let exs_imm      : UIntX    = exq_rdata.imm;
-
     // レジスタ
     var regfile: UIntX<AREG_COUNT>;
-
-    // 各レジスタを最後に書く予定のROBエントリ
-    var producer_valid: logic  [AREG_COUNT];
-    var producer_tag  : RobTag [AREG_COUNT];
-
-    // レジスタ番号
-    let exs_rs1_areg: ArchReg = exs_inst_bits[19:15];
-    let exs_rs2_areg: ArchReg = exs_inst_bits[24:20];
-
-    // データハザード
-    let exs_uses_rs1: logic = case exs_ctrl.itype {
-        InstType::R: 1,
-        InstType::I: if exs_ctrl.is_csr ? exs_ctrl.funct3[1:0] != 0 && !exs_ctrl.funct3[2] : 1,
-        InstType::S: 1,
-        InstType::B: 1,
-        default    : 0,
-    };
-    let exs_uses_rs2: logic = case exs_ctrl.itype {
-        InstType::R: 1,
-        InstType::S: 1,
-        InstType::B: 1,
-        default    : 0,
-    };
-    let exs_rs1_has_producer: logic = exs_uses_rs1 && exs_rs1_areg != 0 && producer_valid[exs_rs1_areg];
-    let exs_rs2_has_producer: logic = exs_uses_rs2 && exs_rs2_areg != 0 && producer_valid[exs_rs2_areg];
-    let exs_rs1_data_hazard : logic = exs_valid && exs_rs1_has_producer && !rob_query1_done;
-    let exs_rs2_data_hazard : logic = exs_valid && exs_rs2_has_producer && !rob_query2_done;
-    let exs_data_hazard     : logic = exs_rs1_data_hazard || exs_rs2_data_hazard;
-
-    // ソースレジスタのデータ
-    // let exs_rs1_data: UIntX = switch {
-    //     exs_rs1_areg == 0                      : 0,
-    //     exs_rs1_has_producer && rob_query1_done: rob_query1_data.result,
-    //     default                                : regfile[exs_rs1_areg],
-    // };
-    // let exs_rs2_data: UIntX = switch {
-    //     exs_rs2_areg == 0                      : 0,
-    //     exs_rs2_has_producer && rob_query2_done: rob_query2_data.result,
-    //     default                                : regfile[exs_rs2_areg],
-    // };
-
-    // ALU
-    // var exs_op1       : UIntX;
-    // var exs_op2       : UIntX;
-    // var exs_alu_result: UIntX;
-    // let exs_add_result: UIntX = exs_op1 + exs_op2;
-
-    // always_comb {
-    //     case exs_ctrl.itype {
-    //         InstType::R, InstType::B: {
-    //             exs_op1 = exs_rs1_data;
-    //             exs_op2 = exs_rs2_data;
-    //         }
-    //         InstType::I, InstType::S: {
-    //             exs_op1 = exs_rs1_data;
-    //             exs_op2 = exs_imm;
-    //         }
-    //         InstType::U, InstType::J: {
-    //             exs_op1 = exs_pc;
-    //             exs_op2 = exs_imm;
-    //         }
-    //         default: {
-    //             exs_op1 = 'x;
-    //             exs_op2 = 'x;
-    //         }
-    //     }
-    // }
 
     var aluq_op1: UIntX;
     var aluq_op2: UIntX;
@@ -553,7 +448,7 @@ module core (
     );
 
     var mdu_is_requested: logic;
-    let mdu_valid       : logic = exs_valid && exs_ctrl.is_muldiv && !exs_data_hazard && !mdu_is_requested;
+    let mdu_valid       : logic = 0;
     var mdu_ready       : logic;
     var mdu_rvalid      : logic;
     var mdu_result      : UIntX;
@@ -577,7 +472,7 @@ module core (
             mdu_is_requested = 0;
         } else {
             // 次のステージに遷移
-            if exq_rvalid && exq_rready {
+            if mdu_rvalid && mduq_rready {
                 mdu_is_requested = 0;
             } else {
                 // muldivunitにリクエストしたか判定する
@@ -589,14 +484,14 @@ module core (
     }
 
     var mdu_rvalided: logic;
-    let mdu_stall   : logic = exs_ctrl.is_muldiv && !(mdu_rvalid && mdu_is_requested) && !mdu_rvalided;
+    let mdu_stall   : logic = ids_is_muldiv && !(mdu_rvalid && mdu_is_requested) && !mdu_rvalided;
 
     always_ff {
         if_reset {
             mdu_rvalided = 0;
         } else {
             // 次のステージに遷移
-            if exq_rvalid && exq_rready {
+            if mdu_rvalid && mduq_rready {
                 mdu_rvalided = 0;
             } else if mdu_is_requested {
                 // muldivunitの処理が完了していたら1にする
@@ -604,18 +499,6 @@ module core (
             }
         }
     }
-
-    var exs_brunit_take: logic;
-    // inst bru: brunit (
-    //     funct3: exs_ctrl.funct3,
-    //     op1   : exs_op1        ,
-    //     op2   : exs_op2        ,
-    //     take  : exs_brunit_take,
-    // );
-
-    // let exs_stall    : logic = exs_data_hazard || mdu_stall;
-    let exs_needs_mem: logic = inst_is_memop(exs_ctrl) || exs_ctrl.is_csr || exs_ctrl.is_jump || inst_is_br(exs_ctrl)
-        || exq_rdata.expt.valid;
 
     let aluq_is_br  : logic = inst_is_br(aluq_rdata.ctrl);
     let aluq_is_jalr: logic = aluq_rdata.ctrl.is_jump && aluq_rdata.ctrl.itype == InstType::I;
@@ -649,30 +532,12 @@ module core (
         alu_write_valid = aluq_writes_rd && aluq_rready;
         alu_write_addr  = aluq_rdata.rd_preg;
         alu_write_data  = aluq_writeback_data;
-
-        rob_query1_tag = producer_tag[exs_rs1_areg];
-        rob_query2_tag = producer_tag[exs_rs2_areg];
     }
 
     var csru_rdata      : UIntX;
     var csru_raise_trap : logic;
     var csru_trap_vector: Addr ;
     var csru_trap_return: logic;
-
-    // 命令が進む経路に空きがあるか
-    let exs_route_ready: logic = !exs_needs_mem || memq_wready;
-    // EX段の命令がROBへ実際に登録された
-    let rob_allocate_fire: logic = rob_allocate_valid && rob_allocate_ready;
-    // ROBに登録された命令が直列化命令（後続命令を確定できない命令）かどうか
-    // 分岐予測の確認はMEM段で行うため，解決前の若い命令をROBへ登録しない
-    // let exs_is_serializing: logic = exs_ctrl.is_jump || inst_is_br(exs_ctrl) || exs_ctrl.is_csr
-    //     || memq_wdata.expt.valid;
-    // ROBに登録された命令が直列化命令の場合，次の命令のROB登録を待つ
-    // let serial_allocate: logic = rob_allocate_fire && exs_is_serializing;
-
-    let producer_allocate: logic = rob_allocate_fire && rob_allocate_data.ctrl.rwb_en && rob_allocate_data.rd_areg != 0;
-
-
 
     ///////////////////////////////// MEM Stage /////////////////////////////////
 
@@ -930,173 +795,6 @@ module core (
         flist_wdata  = rob_commit_data.old_preg;
     }
 
-    ///////////////////////////////// Pending Writes /////////////////////////////////
-
-    let producer_commit: logic = rob_commit_fire && rob_commit_data.ctrl.rwb_en && rob_commit_data.rd_areg != 0;
-
-    always_ff {
-        if_reset {
-            for i in 0..AREG_COUNT {
-                producer_valid[i] = 0;
-                producer_tag[i]   = 0;
-            }
-        } else if csru_raise_trap {
-            // ROBと一緒に、フラッシュした命令の依存情報も破棄する
-            for i in 0..AREG_COUNT {
-                producer_valid[i] = 0;
-                producer_tag[i]   = 0;
-            }
-        } else {
-            // 最新producer自身がcommitした場合だけ解除
-            if producer_commit && producer_valid[rob_commit_data.rd_areg] && producer_tag[rob_commit_data.rd_areg]
-                == rob_head_tag && !(producer_allocate && rob_allocate_data.rd_areg == rob_commit_data.rd_areg) {
-                producer_valid[rob_commit_data.rd_areg] = 0;
-            }
-
-            // 同じサイクルなら新しいallocationを優先
-            if producer_allocate {
-                producer_valid[rob_allocate_data.rd_areg] = 1;
-                producer_tag[rob_allocate_data.rd_areg]   = rob_allocate_tag;
-            }
-        }
-    }
-
-    ///////////////////////////////// DEBUG /////////////////////////////////
-
-    #[ifdef(PRINT_DEBUG)]
-    {
-        var clock_count: u64;
-
-        var perf_cycles         : u64;
-        var perf_issued         : u64;
-        var perf_committed      : u64;
-        var perf_ex_empty       : u64;
-        var perf_serial_stall   : u64;
-        var perf_raw_stall      : u64;
-        var perf_muldiv_stall   : u64;
-        var perf_rob_full_stall : u64;
-        var perf_memq_full_stall: u64;
-        var perf_mem_wait       : u64;
-        var perf_head_wait      : u64;
-        var perf_control_hazard : u64;
-
-        always_ff {
-            if_reset {
-                clock_count = 1;
-
-                perf_cycles          = 0;
-                perf_issued          = 0;
-                perf_committed       = 0;
-                perf_ex_empty        = 0;
-                perf_serial_stall    = 0;
-                perf_raw_stall       = 0;
-                perf_muldiv_stall    = 0;
-                perf_rob_full_stall  = 0;
-                perf_memq_full_stall = 0;
-                perf_mem_wait        = 0;
-                perf_head_wait       = 0;
-                perf_control_hazard  = 0;
-            } else {
-                clock_count += 1;
-
-                perf_cycles += 1;
-
-                if rob_allocate_fire {
-                    perf_issued += 1;
-                }
-
-                if rob_commit_fire {
-                    perf_committed += 1;
-                }
-
-                // EX段の停止理由を排他的に数える
-                if !exq_rvalid {
-                    perf_ex_empty += 1;
-                } else if control_hazard {
-                    perf_control_hazard += 1;
-                } else if serial_pending {
-                    perf_serial_stall += 1;
-                } else if exs_data_hazard {
-                    perf_raw_stall += 1;
-                } else if mdu_stall {
-                    perf_muldiv_stall += 1;
-                } else if !rob_allocate_ready {
-                    perf_rob_full_stall += 1;
-                } else if !exs_route_ready {
-                    perf_memq_full_stall += 1;
-                }
-
-                // MEM側はEX停止理由と重複してもよい独立カウンタ
-                if memq_rvalid && memu_stall {
-                    perf_mem_wait += 1;
-                }
-
-                if memq_rvalid && !mems_can_execute {
-                    perf_head_wait += 1;
-                }
-
-                $display("");
-                $display("# %d", clock_count);
-
-                $display("FRONTEND ------");
-                $display(" redirect : %b", frontend_redirect);
-                $display(" next pc  : %h", i_membus.next_pc);
-                $display("ID ------");
-                if ids_valid {
-                    $display("  %h : %h", ids_pc, ids_inst_bits);
-                    $display("  itype : %b", ids_ctrl.itype);
-                    $display("  imm   : %h", ids_imm);
-                }
-                // $display("EX -----");
-                // if exs_valid {
-                //     $display("  %h : %h", exq_rdata.addr, exq_rdata.bits);
-                //     $display("  op1     : %h", exs_op1);
-                //     $display("  op2     : %h", exs_op2);
-                //     $display("  alu     : %h", exs_alu_result);
-                //     $display("  dhazard : %b", exs_data_hazard);
-                //     if inst_is_br(exs_ctrl) {
-                //         $display("  br take : %b", exs_brunit_take);
-                //     }
-                // }
-                // $display("MEM -----");
-                // if mems_valid {
-                //     $display("  %h : %h", memq_rdata.addr, memq_rdata.bits);
-                //     $display("  mem stall : %b", memu_stall);
-                //     $display("  mem rdata : %h", memu_rdata);
-                //     if mems_ctrl.is_csr {
-                //         $display("  csr rdata : %h", csru_rdata);
-                //         $display("  csr trap  : %b", csru_raise_trap);
-                //         $display("  csr vec   : %h", csru_trap_vector);
-                //     }
-                //     if memq_rdata.br_taken {
-                //         $display("  JUMP TO   : %h", memq_rdata.jump_addr);
-                //     }
-                // }
-                $display("WB ----");
-                if wbs_valid {
-                    $display("  %h : %h", rob_commit_data.addr, rob_commit_data.bits);
-                    if wbs_ctrl.rwb_en {
-                        $display("  reg[%d] <= %h", wbs_rd_areg, wbs_wb_data);
-                    }
-                }
-
-                $display("PERFORMANCE COUNTERS");
-                $display("  total cycles             : %0d", perf_cycles);
-                $display("  instructions issued      : %0d", perf_issued);
-                $display("  instructions committed   : %0d", perf_committed);
-                $display("  EX has no instruction    : %0d", perf_ex_empty);
-                $display("  control hazard / flush   : %0d", perf_control_hazard);
-                $display("  serializing instruction  : %0d", perf_serial_stall);
-                $display("  RAW dependency           : %0d", perf_raw_stall);
-                $display("  multiply/divide wait     : %0d", perf_muldiv_stall);
-                $display("  ROB full                 : %0d", perf_rob_full_stall);
-                $display("  EX/MEM queue full        : %0d", perf_memq_full_stall);
-                $display("  memory response wait     : %0d", perf_mem_wait);
-                $display("  waiting for ROB head     : %0d", perf_head_wait);
-            }
-        }
-    }
-
     ///////////////////////////////// Pipeline trace /////////////////////////////////
 
     #[ifdef(LOG_PIPELINE)]
@@ -1112,16 +810,16 @@ module core (
                 if ids_fire {
                     $display("K\t%0d\tX\t%h\t%h\t%b", trace_cycle, ids_pc, ids_inst_bits, ids_ctrl.itype);
                 }
-                if rob_allocate_fire {
-                    $display(
-                        "K\t%0d\tA\t%0d\t%h\t%h\t%b",
-                        trace_cycle,
-                        rob_allocate_tag,
-                        exs_pc,
-                        exs_inst_bits,
-                        exs_needs_mem,
-                    );
-                }
+                // if rob_allocate_fire {
+                //     $display(
+                //         "K\t%0d\tA\t%0d\t%h\t%h\t%b",
+                //         trace_cycle,
+                //         rob_allocate_tag,
+                //         exs_pc,
+                //         exs_inst_bits,
+                //         exs_needs_mem,
+                //     );
+                // }
                 if rob_complete_valid {
                     $display("K\t%0d\tC\t%0d", trace_cycle, rob_complete_tag);
                 }
@@ -1240,36 +938,6 @@ module core (
         rdata : csrq_rdata    ,
     );
 
-    inst id_ex_fifo: fifo #(
-        DATA_TYPE: exq_type,
-        WIDTH    : 4       ,
-    ) (
-        clk                   ,
-        rst                   ,
-        flush : control_hazard,
-        wready: exq_wready    ,
-        wvalid: exq_wvalid    ,
-        wdata : exq_wdata     ,
-        rready: exq_rready    ,
-        rvalid: exq_rvalid    ,
-        rdata : exq_rdata     ,
-    );
-
-    // inst ex_mem_fifo: fifo #(
-    //     DATA_TYPE: memq_type,
-    //     WIDTH    : 4        ,
-    // ) (
-    //     clk                   ,
-    //     rst                   ,
-    //     flush : control_hazard,
-    //     wready: memq_wready   ,
-    //     wvalid: memq_wvalid   ,
-    //     wdata : memq_wdata    ,
-    //     rready: memq_rready   ,
-    //     rvalid: memq_rvalid   ,
-    //     rdata : memq_rdata    ,
-    // );
-
     inst rob: reorder_buffer #(
         DATA_TYPE: rob_entry_type,
         WIDTH    : ROB_WIDTH     ,
@@ -1295,14 +963,6 @@ module core (
 
         head_valid: rob_head_valid,
         head_tag  : rob_head_tag  ,
-
-        query1_tag : rob_query1_tag ,
-        query1_done: rob_query1_done,
-        query1_data: rob_query1_data,
-
-        query2_tag : rob_query2_tag ,
-        query2_done: rob_query2_done,
-        query2_data: rob_query2_data,
     );
 
     inst flist: free_list (
