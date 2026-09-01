@@ -40,7 +40,7 @@ module core (
         uses_rs2   : logic        ,
     }
 
-    struct memq_type {
+    struct memu_type {
         rob_tag    : RobTag       ,
         addr       : Addr         ,
         bits       : Inst         ,
@@ -97,14 +97,14 @@ module core (
     var ids_pred_target    : Addr ;
 
     let frontend_redirect: logic = control_hazard || fencei_redirect || prediction_redirect;
-    var aluq_next_pc     : Addr ;
+    var alu_next_pc      : Addr ;
     always_comb {
         i_membus.is_redirect = frontend_redirect;
 
         if control_hazard {
             i_membus.next_pc = control_hazard_pc_next;
         } else if fencei_redirect {
-            i_membus.next_pc = aluq_next_pc;
+            i_membus.next_pc = alu_next_pc;
         } else {
             i_membus.next_pc = ids_pred_target;
         }
@@ -112,7 +112,7 @@ module core (
 
     ///////////////////////////////// ID Stage /////////////////////////////////
 
-    let ids_valid     = i_membus.rvalid;
+    // let ids_valid     = i_membus.rvalid;
     let ids_inst_bits = i_membus.rdata;
 
     let ids_fire      : logic         = !control_hazard && i_membus.rvalid && i_membus.rready;
@@ -239,45 +239,45 @@ module core (
     var csru_write_addr : PhysReg;
     var csru_write_data : UIntX  ;
 
-    var aluq_wready  : logic   ;
-    var aluq_wvalid  : logic   ;
-    var aluq_rready  : logic   ;
-    var aluq_rvalid  : logic   ;
-    var aluq_wdata   : euq_type;
-    var aluq_rdata   : euq_type;
-    var aluq_grant   : logic   ;
-    var aluq_done    : logic   ;
-    var aluq_complete: logic   ;
+    var alu_wready  : logic   ;
+    var alu_wvalid  : logic   ;
+    var alu_rready  : logic   ;
+    var alu_rvalid  : logic   ;
+    var alu_wdata   : euq_type;
+    var alu_rdata   : euq_type;
+    var alu_grant   : logic   ;
+    var alu_done    : logic   ;
+    var alu_complete: logic   ;
 
-    var memq_wready  : logic   ;
-    var memq_wvalid  : logic   ;
-    var memq_rready  : logic   ;
-    var memq_rvalid  : logic   ;
-    var memq_wdata   : euq_type;
-    var memq_rdata   : euq_type;
-    var memq_grant   : logic   ;
-    var memq_done    : logic   ;
-    var memq_complete: logic   ;
+    var memu_wready  : logic   ;
+    var memu_wvalid  : logic   ;
+    var memu_rready  : logic   ;
+    var memu_rvalid  : logic   ;
+    var memu_wdata   : euq_type;
+    var memu_rdata   : euq_type;
+    var memu_grant   : logic   ;
+    var memu_done    : logic   ;
+    var memu_complete: logic   ;
 
-    var mduq_wready  : logic   ;
-    var mduq_wvalid  : logic   ;
-    var mduq_rready  : logic   ;
-    var mduq_rvalid  : logic   ;
-    var mduq_wdata   : euq_type;
-    var mduq_rdata   : euq_type;
-    var mduq_grant   : logic   ;
-    var mduq_done    : logic   ;
-    var mduq_complete: logic   ;
+    var mdu_wready  : logic   ;
+    var mdu_wvalid  : logic   ;
+    var mdu_rready  : logic   ;
+    var mdu_rvalid  : logic   ;
+    var mdu_wdata   : euq_type;
+    var mdu_rdata   : euq_type;
+    var mdu_grant   : logic   ;
+    var mdu_done    : logic   ;
+    var mdu_complete: logic   ;
 
-    var csrq_wready  : logic   ;
-    var csrq_wvalid  : logic   ;
-    var csrq_rready  : logic   ;
-    var csrq_rvalid  : logic   ;
-    var csrq_wdata   : euq_type;
-    var csrq_rdata   : euq_type;
-    var csrq_grant   : logic   ;
-    var csrq_done    : logic   ;
-    var csrq_complete: logic   ;
+    var csru_wready  : logic   ;
+    var csru_wvalid  : logic   ;
+    var csru_rready  : logic   ;
+    var csru_rvalid  : logic   ;
+    var csru_wdata   : euq_type;
+    var csru_rdata   : euq_type;
+    var csru_grant   : logic   ;
+    var csru_done    : logic   ;
+    var csru_complete: logic   ;
 
     always_ff {
         if_reset {
@@ -322,20 +322,20 @@ module core (
     always_comb {
         // ID rready: 該当キューが空き + ROB 空き
         let ids_target_ready: logic = switch {
-            ids_is_alu   : aluq_wready,
-            ids_is_load  : memq_wready,
-            ids_is_store : memq_wready,
-            ids_is_muldiv: mduq_wready,
-            ids_is_csr   : csrq_wready,
+            ids_is_alu   : alu_wready,
+            ids_is_load  : memu_wready,
+            ids_is_store : memu_wready,
+            ids_is_muldiv: mdu_wready,
+            ids_is_csr   : csru_wready,
             default      : 1,
         };
         i_membus.rready = !serial_pending && rob_allocate_ready && ids_target_ready && ids_preg_ready;
 
         // 該当キューの wvalid / wdata を駆動
-        aluq_wvalid = ids_fire && ids_is_alu && aluq_wready;
-        memq_wvalid = ids_fire && (ids_is_load || ids_is_store) && memq_wready;
-        mduq_wvalid = ids_fire && ids_is_muldiv && mduq_wready;
-        csrq_wvalid = ids_fire && ids_is_csr && csrq_wready;
+        alu_wvalid  = ids_fire && ids_is_alu && alu_wready;
+        memu_wvalid = ids_fire && (ids_is_load || ids_is_store) && memu_wready;
+        mdu_wvalid  = ids_fire && ids_is_muldiv && mdu_wready;
+        csru_wvalid = ids_fire && ids_is_csr && csru_wready;
 
         // dispatch_data を組み立て
         dispatch_data.addr        = ids_pc;
@@ -354,10 +354,10 @@ module core (
         dispatch_data.uses_rs2    = ids_uses_rs2;
 
         // dispatch_data を代入
-        aluq_wdata = dispatch_data;
-        memq_wdata = dispatch_data;
-        mduq_wdata = dispatch_data;
-        csrq_wdata = dispatch_data;
+        alu_wdata  = dispatch_data;
+        memu_wdata = dispatch_data;
+        mdu_wdata  = dispatch_data;
+        csru_wdata = dispatch_data;
 
         // === ROB allocate (dispatch 時) ===
         rob_allocate_valid           = ids_fire;
@@ -397,13 +397,13 @@ module core (
     ///////////////////////////////// EX Stage /////////////////////////////////
 
     always_comb {
-        alu_read1_addr  = aluq_rdata.rs1_preg;
-        alu_read2_addr  = aluq_rdata.rs2_preg;
-        memu_read1_addr = memq_rdata.rs1_preg;
-        memu_read2_addr = memq_rdata.rs2_preg;
-        mdu_read1_addr  = mduq_rdata.rs1_preg;
-        mdu_read2_addr  = mduq_rdata.rs2_preg;
-        csru_read_addr  = csrq_rdata.rs1_preg;
+        alu_read1_addr  = alu_rdata.rs1_preg;
+        alu_read2_addr  = alu_rdata.rs2_preg;
+        memu_read1_addr = memu_rdata.rs1_preg;
+        memu_read2_addr = memu_rdata.rs2_preg;
+        mdu_read1_addr  = mdu_rdata.rs1_preg;
+        mdu_read2_addr  = mdu_rdata.rs2_preg;
+        csru_read_addr  = csru_rdata.rs1_preg;
     }
 
     // レジスタ
@@ -416,100 +416,100 @@ module core (
 
     ///////////////////////////////// EX Stage (ALU) /////////////////////////////////
 
-    var aluq_op1: UIntX;
-    var aluq_op2: UIntX;
+    var alu_op1: UIntX;
+    var alu_op2: UIntX;
 
     always_comb {
-        let rs1_areg: ArchReg = aluq_rdata.bits[19:15];
-        let rs2_areg: ArchReg = aluq_rdata.bits[24:20];
+        let rs1_areg: ArchReg = alu_rdata.bits[19:15];
+        let rs2_areg: ArchReg = alu_rdata.bits[24:20];
 
-        case aluq_rdata.ctrl.itype {
+        case alu_rdata.ctrl.itype {
             InstType::R, InstType::B: {
                 // R-type (add, sub, and, ...) / B-type (branch)
-                aluq_op1 = if rs1_areg == 0 ? 0 : alu_read1_data;
-                aluq_op2 = if rs2_areg == 0 ? 0 : alu_read2_data;
+                alu_op1 = if rs1_areg == 0 ? 0 : alu_read1_data;
+                alu_op2 = if rs2_areg == 0 ? 0 : alu_read2_data;
             }
             InstType::I, InstType::S: {
                 // I-type (addi, load, store, JALR, CSR) / S-type
-                aluq_op1 = if rs1_areg == 0 ? 0 : alu_read1_data;
-                aluq_op2 = aluq_rdata.imm;
+                alu_op1 = if rs1_areg == 0 ? 0 : alu_read1_data;
+                alu_op2 = alu_rdata.imm;
             }
             InstType::U, InstType::J: {
                 // U-type (LUI, AUIPC) / J-type (JAL)
                 // op1 = PC, op2 = immediate
-                aluq_op1 = aluq_rdata.addr;
-                aluq_op2 = aluq_rdata.imm;
+                alu_op1 = alu_rdata.addr;
+                alu_op2 = alu_rdata.imm;
             }
             default: {
-                aluq_op1 = 0;
-                aluq_op2 = 0;
+                alu_op1 = 0;
+                alu_op2 = 0;
             }
         }
 
     }
 
-    let aluq_is_fence_i: logic = aluq_rdata.bits[6:0] == OP_MISC_MEM && aluq_rdata.bits[14:12] == 3'b001;
-    let aluq_at_head   : logic = rob_head_valid && rob_head_tag == aluq_rdata.rob_tag;
-    assign fencei_redirect = aluq_complete && aluq_is_fence_i;
+    let alu_is_fence_i: logic = alu_rdata.bits[6:0] == OP_MISC_MEM && alu_rdata.bits[14:12] == 3'b001;
+    let alu_at_head   : logic = rob_head_valid && rob_head_tag == alu_rdata.rob_tag;
+    assign fencei_redirect = alu_complete && alu_is_fence_i;
 
-    var aluq_result: UIntX;
-    inst aluq_alu: alu (
-        ctrl  : aluq_rdata.ctrl,
-        op1   : aluq_op1       ,
-        op2   : aluq_op2       ,
-        result: aluq_result    ,
+    var alu_result: UIntX;
+    inst alu_alu: alu (
+        ctrl  : alu_rdata.ctrl,
+        op1   : alu_op1       ,
+        op2   : alu_op2       ,
+        result: alu_result    ,
     );
 
-    let aluq_is_br  : logic = inst_is_br(aluq_rdata.ctrl);
-    let aluq_is_jalr: logic = aluq_rdata.ctrl.is_jump && aluq_rdata.ctrl.itype == InstType::I;
-    // let aluq_is_jal : logic = aluq_rdata.ctrl.is_jump && aluq_rdata.ctrl.itype == InstType::J;
+    let alu_is_br  : logic = inst_is_br(alu_rdata.ctrl);
+    let alu_is_jalr: logic = alu_rdata.ctrl.is_jump && alu_rdata.ctrl.itype == InstType::I;
+    // let alu_is_jal : logic = alu_rdata.ctrl.is_jump && alu_rdata.ctrl.itype == InstType::J;
 
-    var aluq_br_take: logic;
-    inst aluq_bru: brunit (
-        funct3: aluq_rdata.ctrl.funct3,
-        op1   : aluq_op1              ,
-        op2   : aluq_op2              ,
-        take  : aluq_br_take          ,
+    var alu_br_take: logic;
+    inst alu_bru: brunit (
+        funct3: alu_rdata.ctrl.funct3,
+        op1   : alu_op1              ,
+        op2   : alu_op2              ,
+        take  : alu_br_take          ,
     );
 
-    let aluq_mispredict: logic = aluq_rvalid
-        && ((aluq_is_br && aluq_rdata.pred_taken != aluq_br_take)
-            || (aluq_is_jalr && (aluq_rdata.pred_taken != 1 || aluq_rdata.pred_target != (aluq_result & ~1))));
+    let alu_mispredict: logic = alu_rvalid
+        && ((alu_is_br && alu_rdata.pred_taken != alu_br_take)
+            || (alu_is_jalr && (alu_rdata.pred_taken != 1 || alu_rdata.pred_target != (alu_result & ~1))));
 
-    let aluq_writes_rd: logic = aluq_rvalid && aluq_rdata.ctrl.rwb_en && aluq_rdata.bits[11:7] != 0;
+    let alu_writes_rd: logic = alu_rvalid && alu_rdata.ctrl.rwb_en && alu_rdata.bits[11:7] != 0;
 
-    let aluq_writeback_data: UIntX = switch {
-        aluq_rdata.ctrl.is_jump: aluq_next_pc,
-        aluq_rdata.ctrl.is_lui : aluq_rdata.imm,
-        default                : aluq_result,
+    let alu_writeback_data: UIntX = switch {
+        alu_rdata.ctrl.is_jump: alu_next_pc,
+        alu_rdata.ctrl.is_lui : alu_rdata.imm,
+        default               : alu_result,
     };
 
     always_comb {
-        aluq_next_pc = aluq_rdata.addr + (if aluq_rdata.ctrl.is_rvc ? 2 : 4);
+        alu_next_pc = alu_rdata.addr + (if alu_rdata.ctrl.is_rvc ? 2 : 4);
 
-        alu_write_valid = aluq_writes_rd && aluq_rready;
-        alu_write_addr  = aluq_rdata.rd_preg;
-        alu_write_data  = aluq_writeback_data;
+        alu_write_valid = alu_writes_rd && alu_rready;
+        alu_write_addr  = alu_rdata.rd_preg;
+        alu_write_data  = alu_writeback_data;
     }
 
     ///////////////////////////////// EX Stage (MDU) /////////////////////////////////
 
-    var mdu_ready : logic;
-    var mdu_rvalid: logic;
-    var mdu_result: UIntX;
-    var mdu_busy  : logic;
+    var mdu_ready       : logic;
+    var mdu_result      : UIntX;
+    var mdu_result_valid: logic;
+    var mdu_busy        : logic;
 
     inst mdu: muldivunit (
-        clk                             ,
-        rst                             ,
-        valid  : mduq_grant             ,
-        ready  : mdu_ready              ,
-        funct3 : mduq_rdata.ctrl.funct3 ,
-        is_op32: mduq_rdata.ctrl.is_op32,
-        op1    : mdu_read1_data         ,
-        op2    : mdu_read2_data         ,
-        rvalid : mdu_rvalid             ,
-        result : mdu_result             ,
+        clk                            ,
+        rst                            ,
+        valid  : mdu_grant             ,
+        ready  : mdu_ready             ,
+        funct3 : mdu_rdata.ctrl.funct3 ,
+        is_op32: mdu_rdata.ctrl.is_op32,
+        op1    : mdu_read1_data        ,
+        op2    : mdu_read2_data        ,
+        rvalid : mdu_result_valid      ,
+        result : mdu_result            ,
     );
 
     always_ff {
@@ -518,30 +518,37 @@ module core (
         } else if control_hazard {
             mdu_busy = 0;
         } else {
-            if mduq_grant {
+            if mdu_grant {
                 mdu_busy = 1;
             }
-            if mduq_complete {
+            if mdu_complete {
                 mdu_busy = 0;
             }
         }
     }
 
-    var csru_rdata      : UIntX;
-    var csru_raise_trap : logic;
-    var csru_trap_vector: Addr ;
-    var csru_trap_return: logic;
-
     ///////////////////////////////// EX Stage (MEMU) /////////////////////////////////
 
-    let mems_valid    : logic = memq_rvalid;
-    let mems_pc       : Addr  = memq_rdata.addr;
-    let mems_inst_bits: Inst  = memq_rdata.bits;
+    let mems_valid    : logic = memu_rvalid;
+    let mems_pc       : Addr  = memu_rdata.addr;
+    let mems_inst_bits: Inst  = memu_rdata.bits;
 
-    let mems_at_rob_head: logic = rob_head_valid && rob_head_tag == memq_rdata.rob_tag;
+    let mems_at_rob_head: logic = rob_head_valid && rob_head_tag == memu_rdata.rob_tag;
 
-    var memu_rdata: UIntX;
-    var memu_stall: logic;
+    var memu_result: UIntX;
+    var memu_stall : logic;
+
+    inst memu: memunit (
+        clk   : clk                             ,
+        rst   : rst                             ,
+        valid : memu_grant                      ,
+        ctrl  : memu_rdata.ctrl                 ,
+        addr  : memu_read1_data + memu_rdata.imm,
+        rs2   : memu_read2_data                 ,
+        rdata : memu_result                     ,
+        stall : memu_stall                      ,
+        membus: d_membus                        ,
+    );
 
     var minstret: UInt64;
 
@@ -551,7 +558,7 @@ module core (
     always_ff {
         if_reset {
             mems_intr_checked = 0;
-        } else if !mems_valid || memq_rready {
+        } else if !mems_valid || memu_rready {
             // 空または現在の命令をMEMから取り出した
             mems_intr_checked = 0;
         } else if mems_at_rob_head {
@@ -559,39 +566,31 @@ module core (
         }
     }
 
-    let memq_at_head: logic = memq_rvalid && rob_head_valid && rob_head_tag == memq_rdata.rob_tag;
+    let memu_at_head: logic = memu_rvalid && rob_head_valid && rob_head_tag == memu_rdata.rob_tag;
 
     ///////////////////////////////// EX Stage (CSRU) /////////////////////////////////
 
-    let csrq_at_head: logic = csrq_rvalid && rob_head_valid && rob_head_tag == csrq_rdata.rob_tag;
-    let csrq_result : UIntX = csru_rdata;
+    var csru_result     : UIntX;
+    var csru_raise_trap : logic;
+    var csru_trap_vector: Addr ;
+    var csru_trap_return: logic;
 
-    inst memu: memunit (
-        clk   : clk                             ,
-        rst   : rst                             ,
-        valid : memq_grant                      ,
-        ctrl  : memq_rdata.ctrl                 ,
-        addr  : memu_read1_data + memq_rdata.imm,
-        rs2   : memu_read2_data                 ,
-        rdata : memu_rdata                      ,
-        stall : memu_stall                      ,
-        membus: d_membus                        ,
-    );
+    let csru_at_head: logic = csru_rvalid && rob_head_valid && rob_head_tag == csru_rdata.rob_tag;
 
     inst csru: csrunit (
         clk                                ,
         rst                                ,
-        valid      : csrq_grant            ,
-        pc         : csrq_rdata.addr       ,
-        inst_bits  : csrq_rdata.bits       ,
-        ctrl       : csrq_rdata.ctrl       ,
-        expt_info  : csrq_rdata.expt       ,
-        rd_areg    : csrq_rdata.bits[11:7] ,
-        csr_addr   : csrq_rdata.bits[31:20],
-        rs1_areg   : csrq_rdata.bits[19:15],
+        valid      : csru_grant            ,
+        pc         : csru_rdata.addr       ,
+        inst_bits  : csru_rdata.bits       ,
+        ctrl       : csru_rdata.ctrl       ,
+        expt_info  : csru_rdata.expt       ,
+        rd_areg    : csru_rdata.bits[11:7] ,
+        csr_addr   : csru_rdata.bits[31:20],
+        rs1_areg   : csru_rdata.bits[19:15],
         rs1_data   : csru_read_data        ,
         can_intr   : 0                     , // 当面は割り込みなし
-        rdata      : csru_rdata            ,
+        rdata      : csru_result           ,
         mode       : csru_priv_mode        ,
         raise_trap : csru_raise_trap       ,
         trap_vector: csru_trap_vector      ,
@@ -603,138 +602,133 @@ module core (
 
     ///////////////////////////////// EX Stage (Issue / Completion) /////////////////////////////////
 
-    let aluq_sources_ready: logic = (!aluq_rdata.uses_rs1 || !prf_busy[aluq_rdata.rs1_preg])
-        && (!aluq_rdata.uses_rs2 || !prf_busy[aluq_rdata.rs2_preg]);
-    let csrq_sources_ready: logic = (!csrq_rdata.uses_rs1 || !prf_busy[csrq_rdata.rs1_preg])
-        && (!csrq_rdata.uses_rs2 || !prf_busy[csrq_rdata.rs2_preg]);
-    let memq_sources_ready: logic = (!memq_rdata.uses_rs1 || !prf_busy[memq_rdata.rs1_preg])
-        && (!memq_rdata.uses_rs2 || !prf_busy[memq_rdata.rs2_preg]);
-    let mduq_sources_ready: logic = (!mduq_rdata.uses_rs1 || !prf_busy[mduq_rdata.rs1_preg])
-        && (!mduq_rdata.uses_rs2 || !prf_busy[mduq_rdata.rs2_preg]);
+    let alu_sources_ready : logic = (!alu_rdata.uses_rs1 || !prf_busy[alu_rdata.rs1_preg])
+        && (!alu_rdata.uses_rs2 || !prf_busy[alu_rdata.rs2_preg]);
+    let csru_sources_ready: logic = (!csru_rdata.uses_rs1 || !prf_busy[csru_rdata.rs1_preg])
+        && (!csru_rdata.uses_rs2 || !prf_busy[csru_rdata.rs2_preg]);
+    let memu_sources_ready: logic = (!memu_rdata.uses_rs1 || !prf_busy[memu_rdata.rs1_preg])
+        && (!memu_rdata.uses_rs2 || !prf_busy[memu_rdata.rs2_preg]);
+    let mdu_sources_ready : logic = (!mdu_rdata.uses_rs1 || !prf_busy[mdu_rdata.rs1_preg])
+        && (!mdu_rdata.uses_rs2 || !prf_busy[mdu_rdata.rs2_preg]);
 
     always_comb {
         // Completion arbitration: MEM > MDU > CSR > ALU
         // MEMはROB先頭かつoperand readyなら実行開始・継続
-        memq_grant = memq_at_head && memq_sources_ready;
+        memu_grant = memu_at_head && memu_sources_ready;
         // MDUはMDUがidleなら実行開始・継続
-        mduq_grant = mduq_rvalid && mduq_sources_ready && mdu_ready && !mdu_busy && !memq_grant;
+        mdu_grant = mdu_rvalid && mdu_sources_ready && mdu_ready && !mdu_busy && !memu_grant;
         // CSRはROB先頭かつoperand readyなら実行
-        csrq_grant = csrq_at_head && csrq_sources_ready && !mduq_grant;
+        csru_grant = csru_at_head && csru_sources_ready && !mdu_grant;
         // ALUは(fence_iでないまたはROB先頭)かつoperand readyなら実行開始・継続
-        aluq_grant = aluq_rvalid && aluq_sources_ready && (!aluq_is_fence_i || aluq_at_head) && !csrq_grant;
+        alu_grant = alu_rvalid && alu_sources_ready && (!alu_is_fence_i || alu_at_head) && !csru_grant;
     }
 
     always_comb {
         // 優先順位: MEM > MDU > CSR > ALU
-        memq_complete = memq_done;
-        mduq_complete = mduq_done && !memq_complete;
-        csrq_complete = csrq_done && !memq_complete && !mduq_complete;
-        aluq_complete = aluq_done && !memq_complete && !mduq_complete && !csrq_complete;
+        memu_complete = memu_done;
+        mdu_complete  = mdu_done && !memu_complete;
+        csru_complete = csru_done && !memu_complete && !mdu_complete;
+        alu_complete  = alu_done && !memu_complete && !mdu_complete && !csru_complete;
     }
 
     always_comb {
-        aluq_done = aluq_grant;
-        csrq_done = csrq_grant;
-        mduq_done = mdu_busy && mdu_rvalid;
-        memq_done = memq_grant && !memu_stall;
+        alu_done  = alu_grant;
+        csru_done = csru_grant;
+        mdu_done  = mdu_busy && mdu_result_valid;
+        memu_done = memu_grant && !memu_stall;
     }
 
     always_comb {
         // MEM -> WB
-        aluq_rready = aluq_complete;
-        memq_rready = memq_complete;
-        mduq_rready = mduq_complete;
-        csrq_rready = csrq_complete;
+        alu_rready  = alu_complete;
+        memu_rready = memu_complete;
+        mdu_rready  = mdu_complete;
+        csru_rready = csru_complete;
 
-        rob_complete_valid = aluq_complete || memq_complete || mduq_complete || csrq_complete;
+        rob_complete_valid = alu_complete || memu_complete || mdu_complete || csru_complete;
         rob_complete_tag   = switch {
-            aluq_complete: aluq_rdata.rob_tag,
-            memq_complete: memq_rdata.rob_tag,
-            mduq_complete: mduq_rdata.rob_tag,
-            csrq_complete: csrq_rdata.rob_tag,
+            alu_complete : alu_rdata.rob_tag,
+            memu_complete: memu_rdata.rob_tag,
+            mdu_complete : mdu_rdata.rob_tag,
+            csru_complete: csru_rdata.rob_tag,
             default      : 0,
         };
         rob_complete_data.addr = switch {
-            aluq_complete: aluq_rdata.addr,
-            memq_complete: memq_rdata.addr,
-            mduq_complete: mduq_rdata.addr,
-            csrq_complete: csrq_rdata.addr,
+            alu_complete : alu_rdata.addr,
+            memu_complete: memu_rdata.addr,
+            mdu_complete : mdu_rdata.addr,
+            csru_complete: csru_rdata.addr,
             default      : 0
         };
         rob_complete_data.bits = switch {
-            aluq_complete: aluq_rdata.bits,
-            memq_complete: memq_rdata.bits,
-            mduq_complete: mduq_rdata.bits,
-            csrq_complete: csrq_rdata.bits,
+            alu_complete : alu_rdata.bits,
+            memu_complete: memu_rdata.bits,
+            mdu_complete : mdu_rdata.bits,
+            csru_complete: csru_rdata.bits,
             default      : 0
         };
         rob_complete_data.ctrl = switch {
-            aluq_complete: aluq_rdata.ctrl,
-            memq_complete: memq_rdata.ctrl,
-            mduq_complete: mduq_rdata.ctrl,
-            csrq_complete: csrq_rdata.ctrl,
+            alu_complete : alu_rdata.ctrl,
+            memu_complete: memu_rdata.ctrl,
+            mdu_complete : mdu_rdata.ctrl,
+            csru_complete: csru_rdata.ctrl,
             default      : 0
         };
         rob_complete_data.rd_areg = switch {
-            aluq_complete: aluq_rdata.bits[11:7],
-            memq_complete: memq_rdata.bits[11:7],
-            mduq_complete: mduq_rdata.bits[11:7],
-            csrq_complete: csrq_rdata.bits[11:7],
+            alu_complete : alu_rdata.bits[11:7],
+            memu_complete: memu_rdata.bits[11:7],
+            mdu_complete : mdu_rdata.bits[11:7],
+            csru_complete: csru_rdata.bits[11:7],
             default      : 0
         };
         rob_complete_data.old_preg = switch {
-            aluq_complete: aluq_rdata.old_preg,
-            memq_complete: memq_rdata.old_preg,
-            mduq_complete: mduq_rdata.old_preg,
-            csrq_complete: csrq_rdata.old_preg,
+            alu_complete : alu_rdata.old_preg,
+            memu_complete: memu_rdata.old_preg,
+            mdu_complete : mdu_rdata.old_preg,
+            csru_complete: csru_rdata.old_preg,
             default      : 0
         };
         rob_complete_data.result = switch {
-            aluq_complete: aluq_writeback_data,
-            memq_complete: memu_rdata,
-            mduq_complete: mdu_result,
-            csrq_complete: csrq_result,
+            alu_complete : alu_writeback_data,
+            memu_complete: memu_result,
+            mdu_complete : mdu_result,
+            csru_complete: csru_result,
             default      : 0,
         };
         rob_complete_data.expt = switch {
-            aluq_complete: aluq_rdata.expt,
-            memq_complete: memq_rdata.expt,
-            mduq_complete: mduq_rdata.expt,
-            csrq_complete: csrq_rdata.expt,
+            alu_complete : alu_rdata.expt,
+            memu_complete: memu_rdata.expt,
+            mdu_complete : mdu_rdata.expt,
+            csru_complete: csru_rdata.expt,
             default      : 0,
         };
-        rob_complete_data.raise_trap = csrq_complete && csru_raise_trap && !csru_trap_return;
+        rob_complete_data.raise_trap = csru_complete && csru_raise_trap && !csru_trap_return;
 
-        memu_write_valid = memq_complete && memq_rdata.ctrl.is_load;
-        memu_write_addr  = memq_rdata.rd_preg;
-        memu_write_data  = memu_rdata;
+        memu_write_valid = memu_complete && memu_rdata.ctrl.is_load;
+        memu_write_addr  = memu_rdata.rd_preg;
+        memu_write_data  = memu_result;
 
-        csru_write_valid = csrq_complete && csrq_rdata.ctrl.rwb_en && csrq_rdata.rd_preg != 0;
-        csru_write_addr  = csrq_rdata.rd_preg;
-        csru_write_data  = csrq_result;
+        csru_write_valid = csru_complete && csru_rdata.ctrl.rwb_en && csru_rdata.rd_preg != 0;
+        csru_write_addr  = csru_rdata.rd_preg;
+        csru_write_data  = csru_result;
 
-        mdu_write_valid = mduq_complete && mduq_rdata.ctrl.rwb_en && mduq_rdata.rd_preg != 0;
-        mdu_write_addr  = mduq_rdata.rd_preg;
+        mdu_write_valid = mdu_complete && mdu_rdata.ctrl.rwb_en && mdu_rdata.rd_preg != 0;
+        mdu_write_addr  = mdu_rdata.rd_preg;
         mdu_write_data  = mdu_result;
     }
 
     always_comb {
-        let csr_control_hazard: logic = csrq_complete && csru_raise_trap;
-        control_hazard     = (aluq_complete && aluq_mispredict) || csr_control_hazard;
-        let aluq_recovery_pc  : Addr = switch {
-            aluq_is_jalr: (aluq_result & ~1),
-            aluq_br_take: (aluq_rdata.addr + aluq_rdata.imm),
-            default     : (aluq_rdata.addr + (if aluq_rdata.ctrl.is_rvc ? 2 : 4))
+        let csru_control_hazard: logic = csru_complete && csru_raise_trap;
+        control_hazard      = (alu_complete && alu_mispredict) || csru_control_hazard;
+        let alu_recovery_pc    : Addr = switch {
+            alu_is_jalr: (alu_result & ~1),
+            alu_br_take: (alu_rdata.addr + alu_rdata.imm),
+            default    : (alu_rdata.addr + (if alu_rdata.ctrl.is_rvc ? 2 : 4))
         };
-        control_hazard_pc_next = if csr_control_hazard ? csru_trap_vector : aluq_recovery_pc;
+        control_hazard_pc_next = if csru_control_hazard ? csru_trap_vector : alu_recovery_pc;
     }
 
     ///////////////////////////////// WB Stage /////////////////////////////////
-
-    // let wbs_valid  : logic    = rob_commit_valid;
-    // let wbs_ctrl   : InstCtrl = rob_commit_data.ctrl;
-    // let wbs_rd_areg: ArchReg  = rob_commit_data.rd_areg;
-    // let wbs_wb_data: UIntX    = rob_commit_data.result;
 
     always_ff {
         if_reset {
@@ -762,8 +756,8 @@ module core (
             serial_pending = 0;
         } else if control_hazard {
             serial_pending = 0;
-        } else if aluq_complete && (aluq_rdata.ctrl.is_jump || inst_is_br(aluq_rdata.ctrl) || aluq_is_fence_i)
-            || csrq_complete {
+        } else if alu_complete && (alu_rdata.ctrl.is_jump || inst_is_br(alu_rdata.ctrl) || alu_is_fence_i)
+            || csru_complete {
             serial_pending = 0;
         } else if ids_fire && (ids_ctrl.is_jump || inst_is_br(ids_ctrl) || ids_ctrl.is_csr || ids_is_fence_i) {
             serial_pending = 1;
@@ -841,9 +835,9 @@ module core (
         predict_taken: bimodal_pred_taken,
         predict_valid: bimodal_pred_valid,
 
-        update_valid: aluq_rvalid && aluq_rready && inst_is_br(aluq_rdata.ctrl),
-        update_pc   : aluq_rdata.addr                                          ,
-        update_taken: aluq_br_take                                             ,
+        update_valid: alu_rvalid && alu_rready && inst_is_br(alu_rdata.ctrl),
+        update_pc   : alu_rdata.addr                                        ,
+        update_taken: alu_br_take                                           ,
     );
 
     inst btb: branch_target_buffer (
@@ -854,9 +848,9 @@ module core (
         predict_hit   : btb_hit   ,
         predict_target: btb_target,
 
-        update_valid : aluq_rvalid && aluq_rready && aluq_is_jalr,
-        update_pc    : aluq_rdata.addr                           ,
-        update_target: aluq_result & ~1,
+        update_valid : alu_rvalid && alu_rready && alu_is_jalr,
+        update_pc    : alu_rdata.addr                         ,
+        update_target: alu_result & ~1,
     );
 
     ///////////////////////////////// FIFO /////////////////////////////////
@@ -868,12 +862,12 @@ module core (
         clk                   ,
         rst                   ,
         flush : control_hazard,
-        wready: aluq_wready   ,
-        wvalid: aluq_wvalid   ,
-        wdata : aluq_wdata    ,
-        rready: aluq_rready   ,
-        rvalid: aluq_rvalid   ,
-        rdata : aluq_rdata    ,
+        wready: alu_wready    ,
+        wvalid: alu_wvalid    ,
+        wdata : alu_wdata     ,
+        rready: alu_rready    ,
+        rvalid: alu_rvalid    ,
+        rdata : alu_rdata     ,
     );
 
     inst memq: fifo #(
@@ -883,12 +877,12 @@ module core (
         clk                   ,
         rst                   ,
         flush : control_hazard,
-        wready: memq_wready   ,
-        wvalid: memq_wvalid   ,
-        wdata : memq_wdata    ,
-        rready: memq_rready   ,
-        rvalid: memq_rvalid   ,
-        rdata : memq_rdata    ,
+        wready: memu_wready   ,
+        wvalid: memu_wvalid   ,
+        wdata : memu_wdata    ,
+        rready: memu_rready   ,
+        rvalid: memu_rvalid   ,
+        rdata : memu_rdata    ,
     );
 
     inst muldivq: fifo #(
@@ -898,12 +892,12 @@ module core (
         clk                   ,
         rst                   ,
         flush : control_hazard,
-        wready: mduq_wready   ,
-        wvalid: mduq_wvalid   ,
-        wdata : mduq_wdata    ,
-        rready: mduq_rready   ,
-        rvalid: mduq_rvalid   ,
-        rdata : mduq_rdata    ,
+        wready: mdu_wready    ,
+        wvalid: mdu_wvalid    ,
+        wdata : mdu_wdata     ,
+        rready: mdu_rready    ,
+        rvalid: mdu_rvalid    ,
+        rdata : mdu_rdata     ,
     );
 
     inst csrq: fifo #(
@@ -913,12 +907,12 @@ module core (
         clk                   ,
         rst                   ,
         flush : control_hazard,
-        wready: csrq_wready   ,
-        wvalid: csrq_wvalid   ,
-        wdata : csrq_wdata    ,
-        rready: csrq_rready   ,
-        rvalid: csrq_rvalid   ,
-        rdata : csrq_rdata    ,
+        wready: csru_wready   ,
+        wvalid: csru_wvalid   ,
+        wdata : csru_wdata    ,
+        rready: csru_rready   ,
+        rvalid: csru_rvalid   ,
+        rdata : csru_rdata    ,
     );
 
     inst rob: reorder_buffer #(
