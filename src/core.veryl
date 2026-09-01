@@ -86,13 +86,6 @@ module core (
     var rob_head_valid: logic ;
     var rob_head_tag  : RobTag;
 
-    // var rob_query1_tag : RobTag        ;
-    // var rob_query1_done: logic         ;
-    // var rob_query1_data: rob_entry_type;
-    // var rob_query2_tag : RobTag        ;
-    // var rob_query2_done: logic         ;
-    // var rob_query2_data: rob_entry_type;
-
     ///////////////////////////////// IF Stage /////////////////////////////////
 
     var control_hazard        : logic;
@@ -246,37 +239,45 @@ module core (
     var csru_write_addr : PhysReg;
     var csru_write_data : UIntX  ;
 
-    var aluq_wready: logic   ;
-    var aluq_wvalid: logic   ;
-    var aluq_rready: logic   ;
-    var aluq_rvalid: logic   ;
-    var aluq_wdata : euq_type;
-    var aluq_rdata : euq_type;
-    var aluq_grant : logic   ;
+    var aluq_wready  : logic   ;
+    var aluq_wvalid  : logic   ;
+    var aluq_rready  : logic   ;
+    var aluq_rvalid  : logic   ;
+    var aluq_wdata   : euq_type;
+    var aluq_rdata   : euq_type;
+    var aluq_grant   : logic   ;
+    var aluq_done    : logic   ;
+    var aluq_complete: logic   ;
 
-    var memq_wready: logic   ;
-    var memq_wvalid: logic   ;
-    var memq_rready: logic   ;
-    var memq_rvalid: logic   ;
-    var memq_wdata : euq_type;
-    var memq_rdata : euq_type;
-    var memq_grant : logic   ;
+    var memq_wready  : logic   ;
+    var memq_wvalid  : logic   ;
+    var memq_rready  : logic   ;
+    var memq_rvalid  : logic   ;
+    var memq_wdata   : euq_type;
+    var memq_rdata   : euq_type;
+    var memq_grant   : logic   ;
+    var memq_done    : logic   ;
+    var memq_complete: logic   ;
 
-    var mduq_wready: logic   ;
-    var mduq_wvalid: logic   ;
-    var mduq_rready: logic   ;
-    var mduq_rvalid: logic   ;
-    var mduq_wdata : euq_type;
-    var mduq_rdata : euq_type;
-    var mduq_grant : logic   ;
+    var mduq_wready  : logic   ;
+    var mduq_wvalid  : logic   ;
+    var mduq_rready  : logic   ;
+    var mduq_rvalid  : logic   ;
+    var mduq_wdata   : euq_type;
+    var mduq_rdata   : euq_type;
+    var mduq_grant   : logic   ;
+    var mduq_done    : logic   ;
+    var mduq_complete: logic   ;
 
-    var csrq_wready: logic   ;
-    var csrq_wvalid: logic   ;
-    var csrq_rready: logic   ;
-    var csrq_rvalid: logic   ;
-    var csrq_wdata : euq_type;
-    var csrq_rdata : euq_type;
-    var csrq_grant : logic   ;
+    var csrq_wready  : logic   ;
+    var csrq_wvalid  : logic   ;
+    var csrq_rready  : logic   ;
+    var csrq_rvalid  : logic   ;
+    var csrq_wdata   : euq_type;
+    var csrq_rdata   : euq_type;
+    var csrq_grant   : logic   ;
+    var csrq_done    : logic   ;
+    var csrq_complete: logic   ;
 
     always_ff {
         if_reset {
@@ -408,6 +409,13 @@ module core (
     // レジスタ
     var regfile: UIntX<AREG_COUNT>;
 
+    // *_grant     実行ユニットへ命令を受理させる
+    // *_done      実行ユニットの処理結果が有効
+    // *_complete  ROB completeポートを獲得
+    // *_rready    キューから命令を取り出す
+
+    ///////////////////////////////// EX Stage (ALU) /////////////////////////////////
+
     var aluq_op1: UIntX;
     var aluq_op2: UIntX;
 
@@ -437,7 +445,12 @@ module core (
                 aluq_op2 = 0;
             }
         }
+
     }
+
+    let aluq_is_fence_i: logic = aluq_rdata.bits[6:0] == OP_MISC_MEM && aluq_rdata.bits[14:12] == 3'b001;
+    let aluq_at_head   : logic = rob_head_valid && rob_head_tag == aluq_rdata.rob_tag;
+    assign fencei_redirect = aluq_complete && aluq_is_fence_i;
 
     var aluq_result: UIntX;
     inst aluq_alu: alu (
@@ -447,62 +460,9 @@ module core (
         result: aluq_result    ,
     );
 
-    var mdu_is_requested: logic;
-    let mdu_valid       : logic = 0;
-    var mdu_ready       : logic;
-    var mdu_rvalid      : logic;
-    var mdu_result      : UIntX;
-    var mduq_complete   : logic;
-
-    // inst mdu: muldivunit (
-    //     clk                      ,
-    //     rst                      ,
-    //     valid  : mdu_valid       ,
-    //     ready  : mdu_ready       ,
-    //     funct3 : exs_ctrl.funct3 ,
-    //     is_op32: exs_ctrl.is_op32,
-    //     op1    : exs_op1         ,
-    //     op2    : exs_op2         ,
-    //     rvalid : mdu_rvalid      ,
-    //     result : mdu_result      ,
-    // );
-
-    always_ff {
-        if_reset {
-            mdu_is_requested = 0;
-        } else {
-            // 次のステージに遷移
-            if mdu_rvalid && mduq_rready {
-                mdu_is_requested = 0;
-            } else {
-                // muldivunitにリクエストしたか判定する
-                if mdu_valid && mdu_ready {
-                    mdu_is_requested = 1;
-                }
-            }
-        }
-    }
-
-    var mdu_rvalided: logic;
-    let mdu_stall   : logic = ids_is_muldiv && !(mdu_rvalid && mdu_is_requested) && !mdu_rvalided;
-
-    always_ff {
-        if_reset {
-            mdu_rvalided = 0;
-        } else {
-            // 次のステージに遷移
-            if mdu_rvalid && mduq_rready {
-                mdu_rvalided = 0;
-            } else if mdu_is_requested {
-                // muldivunitの処理が完了していたら1にする
-                mdu_rvalided |= mdu_rvalid;
-            }
-        }
-    }
-
     let aluq_is_br  : logic = inst_is_br(aluq_rdata.ctrl);
     let aluq_is_jalr: logic = aluq_rdata.ctrl.is_jump && aluq_rdata.ctrl.itype == InstType::I;
-    let aluq_is_jal : logic = aluq_rdata.ctrl.is_jump && aluq_rdata.ctrl.itype == InstType::J;
+    // let aluq_is_jal : logic = aluq_rdata.ctrl.is_jump && aluq_rdata.ctrl.itype == InstType::J;
 
     var aluq_br_take: logic;
     inst aluq_bru: brunit (
@@ -518,8 +478,6 @@ module core (
 
     let aluq_writes_rd: logic = aluq_rvalid && aluq_rdata.ctrl.rwb_en && aluq_rdata.bits[11:7] != 0;
 
-    var aluq_complete: logic;
-
     let aluq_writeback_data: UIntX = switch {
         aluq_rdata.ctrl.is_jump: aluq_next_pc,
         aluq_rdata.ctrl.is_lui : aluq_rdata.imm,
@@ -534,39 +492,61 @@ module core (
         alu_write_data  = aluq_writeback_data;
     }
 
+    ///////////////////////////////// EX Stage (MDU) /////////////////////////////////
+
+    var mdu_ready : logic;
+    var mdu_rvalid: logic;
+    var mdu_result: UIntX;
+    var mdu_busy  : logic;
+
+    inst mdu: muldivunit (
+        clk                             ,
+        rst                             ,
+        valid  : mduq_grant             ,
+        ready  : mdu_ready              ,
+        funct3 : mduq_rdata.ctrl.funct3 ,
+        is_op32: mduq_rdata.ctrl.is_op32,
+        op1    : mdu_read1_data         ,
+        op2    : mdu_read2_data         ,
+        rvalid : mdu_rvalid             ,
+        result : mdu_result             ,
+    );
+
+    always_ff {
+        if_reset {
+            mdu_busy = 0;
+        } else if control_hazard {
+            mdu_busy = 0;
+        } else {
+            if mduq_grant {
+                mdu_busy = 1;
+            }
+            if mduq_complete {
+                mdu_busy = 0;
+            }
+        }
+    }
+
     var csru_rdata      : UIntX;
     var csru_raise_trap : logic;
     var csru_trap_vector: Addr ;
     var csru_trap_return: logic;
 
-    ///////////////////////////////// MEM Stage /////////////////////////////////
+    ///////////////////////////////// EX Stage (MEMU) /////////////////////////////////
 
-    let mems_valid    : logic         = memq_rvalid;
-    let mems_pc       : Addr          = memq_rdata.addr;
-    let mems_inst_bits: Inst          = memq_rdata.bits;
-    let mems_ctrl     : InstCtrl      = memq_rdata.ctrl;
-    let mems_expt     : ExceptionInfo = memq_rdata.expt;
-    // let mems_rd_areg  : ArchReg       = mems_inst_bits[11:7];
+    let mems_valid    : logic = memq_rvalid;
+    let mems_pc       : Addr  = memq_rdata.addr;
+    let mems_inst_bits: Inst  = memq_rdata.bits;
 
-    let mems_is_store   : logic = inst_is_store(mems_ctrl);
     let mems_at_rob_head: logic = rob_head_valid && rob_head_tag == memq_rdata.rob_tag;
-
-    // 命令が直列化命令（後続命令を確定できない命令）かどうか
-    let mems_is_serializing: logic = mems_ctrl.is_jump || inst_is_br(mems_ctrl) || mems_ctrl.is_csr || mems_expt.valid;
-
-    // Storeまたは直列化命令ならROB先頭の場合だけ実行してよい
-    let mems_requires_head: logic = mems_is_store || mems_ctrl.is_amo || mems_ctrl.is_csr || mems_expt.valid;
-    let mems_can_execute  : logic = !mems_requires_head || mems_at_rob_head;
 
     var memu_rdata: UIntX;
     var memu_stall: logic;
-    // let memu_addr : Addr  = if mems_ctrl.is_amo ? memq_rdata.rs1_data : memq_rdata.alu_result;
 
     var minstret: UInt64;
 
     // ROB先頭命令の最初のサイクルでだけ受け付ける
     var mems_intr_checked: logic;
-    let mems_can_intr    : logic = mems_valid && mems_at_rob_head && !mems_intr_checked;
 
     always_ff {
         if_reset {
@@ -579,13 +559,12 @@ module core (
         }
     }
 
-    let memq_at_head : logic = memq_rvalid && rob_head_valid && rob_head_tag == memq_rdata.rob_tag;
-    var memq_complete: logic;
+    let memq_at_head: logic = memq_rvalid && rob_head_valid && rob_head_tag == memq_rdata.rob_tag;
 
-    // CSR execution
-    let csrq_at_head : logic = csrq_rvalid && rob_head_valid && rob_head_tag == csrq_rdata.rob_tag;
-    let csrq_result  : UIntX = csru_rdata;
-    var csrq_complete: logic;
+    ///////////////////////////////// EX Stage (CSRU) /////////////////////////////////
+
+    let csrq_at_head: logic = csrq_rvalid && rob_head_valid && rob_head_tag == csrq_rdata.rob_tag;
+    let csrq_result : UIntX = csru_rdata;
 
     inst memu: memunit (
         clk   : clk                             ,
@@ -622,42 +601,42 @@ module core (
         aclint                             ,
     );
 
+    ///////////////////////////////// EX Stage (Issue / Completion) /////////////////////////////////
+
     let aluq_sources_ready: logic = (!aluq_rdata.uses_rs1 || !prf_busy[aluq_rdata.rs1_preg])
         && (!aluq_rdata.uses_rs2 || !prf_busy[aluq_rdata.rs2_preg]);
     let csrq_sources_ready: logic = (!csrq_rdata.uses_rs1 || !prf_busy[csrq_rdata.rs1_preg])
         && (!csrq_rdata.uses_rs2 || !prf_busy[csrq_rdata.rs2_preg]);
     let memq_sources_ready: logic = (!memq_rdata.uses_rs1 || !prf_busy[memq_rdata.rs1_preg])
         && (!memq_rdata.uses_rs2 || !prf_busy[memq_rdata.rs2_preg]);
-
-    let aluq_is_fence_i: logic = aluq_rdata.bits[6:0] == OP_MISC_MEM && aluq_rdata.bits[14:12] == 3'b001;
-    let aluq_at_head   : logic = rob_head_valid && rob_head_tag == aluq_rdata.rob_tag;
+    let mduq_sources_ready: logic = (!mduq_rdata.uses_rs1 || !prf_busy[mduq_rdata.rs1_preg])
+        && (!mduq_rdata.uses_rs2 || !prf_busy[mduq_rdata.rs2_preg]);
 
     always_comb {
-        // Completion arbitration: MEM > CSR > ALU
+        // Completion arbitration: MEM > MDU > CSR > ALU
         // MEMはROB先頭かつoperand readyなら実行開始・継続
         memq_grant = memq_at_head && memq_sources_ready;
+        // MDUはMDUがidleなら実行開始・継続
+        mduq_grant = mduq_rvalid && mduq_sources_ready && mdu_ready && !mdu_busy && !memq_grant;
         // CSRはROB先頭かつoperand readyなら実行
-        // 現在ROB completeが1ポートなので、MEM完了時は譲る
-        csrq_grant = csrq_at_head && csrq_sources_ready && !memq_complete;
+        csrq_grant = csrq_at_head && csrq_sources_ready && !mduq_grant;
         // ALUは(fence_iでないまたはROB先頭)かつoperand readyなら実行開始・継続
-        aluq_grant = aluq_rvalid && aluq_sources_ready && (!aluq_is_fence_i || aluq_at_head) && !memq_complete
-            && !csrq_at_head;
-        // 現在MulDiv経路は未実装
-        mduq_grant = 0;
-
-        fencei_redirect = aluq_complete && aluq_is_fence_i;
+        aluq_grant = aluq_rvalid && aluq_sources_ready && (!aluq_is_fence_i || aluq_at_head) && !csrq_grant;
     }
 
     always_comb {
-        // ALUとCSRはgrantしたサイクルに完了
-        aluq_complete = aluq_grant;
-        csrq_complete = csrq_grant;
+        // 優先順位: MEM > MDU > CSR > ALU
+        memq_complete = memq_done;
+        mduq_complete = mduq_done && !memq_complete;
+        csrq_complete = csrq_done && !memq_complete && !mduq_complete;
+        aluq_complete = aluq_done && !memq_complete && !mduq_complete && !csrq_complete;
+    }
 
-        // MEMはmemunitのstallが解除された時に完了
-        memq_complete = memq_grant && !memu_stall;
-
-        // MulDivは未実装
-        mduq_complete = 0;
+    always_comb {
+        aluq_done = aluq_grant;
+        csrq_done = csrq_grant;
+        mduq_done = mdu_busy && mdu_rvalid;
+        memq_done = memq_grant && !memu_stall;
     }
 
     always_comb {
@@ -730,9 +709,13 @@ module core (
         memu_write_addr  = memq_rdata.rd_preg;
         memu_write_data  = memu_rdata;
 
-        csru_write_valid = csrq_complete && csrq_rdata.ctrl.rwb_en && csrq_rdata.bits[11:7] != 0;
+        csru_write_valid = csrq_complete && csrq_rdata.ctrl.rwb_en && csrq_rdata.rd_preg != 0;
         csru_write_addr  = csrq_rdata.rd_preg;
         csru_write_data  = csrq_result;
+
+        mdu_write_valid = mduq_complete && mduq_rdata.ctrl.rwb_en && mduq_rdata.rd_preg != 0;
+        mdu_write_addr  = mduq_rdata.rd_preg;
+        mdu_write_data  = mdu_result;
     }
 
     always_comb {
@@ -748,10 +731,10 @@ module core (
 
     ///////////////////////////////// WB Stage /////////////////////////////////
 
-    let wbs_valid  : logic    = rob_commit_valid;
-    let wbs_ctrl   : InstCtrl = rob_commit_data.ctrl;
-    let wbs_rd_areg: ArchReg  = rob_commit_data.rd_areg;
-    let wbs_wb_data: UIntX    = rob_commit_data.result;
+    // let wbs_valid  : logic    = rob_commit_valid;
+    // let wbs_ctrl   : InstCtrl = rob_commit_data.ctrl;
+    // let wbs_rd_areg: ArchReg  = rob_commit_data.rd_areg;
+    // let wbs_wb_data: UIntX    = rob_commit_data.result;
 
     always_ff {
         if_reset {
