@@ -25,8 +25,14 @@ module core (
     var rob_commit_ready: logic         ;
     var rob_commit_data : rob_entry_type;
 
-    var rob_head_valid: logic ;
-    var rob_head_tag  : RobTag;
+    var rob_head_valid    : logic         ;
+    var rob_head_tag      : RobTag        ;
+    var rob_rollback_valid: logic         ;
+    var rob_rollback_ready: logic         ;
+    var rob_rollback_data : rob_entry_type;
+    var rob_rollback_busy : logic         ;
+    var rollback_fire     : logic         ;
+    var rollback_reg_fire : logic         ;
 
     ///////////////////////////////// IF Stage /////////////////////////////////
 
@@ -132,10 +138,9 @@ module core (
     var rat_write_addr : ArchReg;
     var rat_write_data : PhysReg;
 
-    var rat_flush        : logic ;
-    var branch_checkpoint: logic ;
-    var branch_pending   : logic ;
-    var branch_rob_tag   : RobTag;
+    var rat_flush     : logic ;
+    var branch_pending: logic ;
+    var branch_rob_tag: RobTag;
 
     let ids_new_preg: PhysReg = flist_rdata;
     let ids_old_preg: PhysReg = rat_write_old;
@@ -148,17 +153,16 @@ module core (
         rat_read1_addr = ids_rs1_areg;
         rat_read2_addr = ids_rs2_areg;
 
-        rat_write_valid = rename_fire;
-        rat_write_addr  = ids_rd_areg;
-        rat_write_data  = ids_new_preg;
+        rat_write_valid = rename_fire || rollback_reg_fire;
+        rat_write_addr  = if rollback_reg_fire ? rob_rollback_data.rd_areg : ids_rd_areg;
+        rat_write_data  = if rollback_reg_fire ? rob_rollback_data.old_preg : ids_new_preg;
 
-        rat_flush = control_hazard;
+        rat_flush = 0;
     }
 
     var csru_priv_mode: PrivMode;
 
-    var prf_busy           : logic [PREG_COUNT];
-    var prf_busy_checkpoint: logic [PREG_COUNT];
+    var prf_busy: logic [PREG_COUNT];
 
     var alu_read1_addr : PhysReg;
     var alu_read1_data : UIntX  ;
@@ -237,49 +241,24 @@ module core (
     always_ff {
         if_reset {
             for i in 0..PREG_COUNT {
-                prf_busy[i]            = 0;
-                prf_busy_checkpoint[i] = 0;
-            }
-        } else if branch_redirect {
-            for i in 0..PREG_COUNT {
-                prf_busy[i] = prf_busy_checkpoint[i];
+                prf_busy[i] = 0;
             }
         } else {
-            if branch_checkpoint {
-                for i in 0..PREG_COUNT {
-                    prf_busy_checkpoint[i] = prf_busy[i];
-                }
-            }
             // 実行完了を先に反映
             if alu_write_valid {
                 prf_busy[alu_write_addr] = 0;
-                if branch_checkpoint
-                    || (branch_pending && (alu_rdata.rob_tag - rob_head_tag) <: (branch_rob_tag - rob_head_tag)) {
-                    prf_busy_checkpoint[alu_write_addr] = 0;
-                }
             }
             if memu_write_valid {
                 prf_busy[memu_write_addr] = 0;
-                if branch_checkpoint
-                    || (branch_pending && (memu_rdata.rob_tag - rob_head_tag) <: (branch_rob_tag - rob_head_tag)) {
-                    prf_busy_checkpoint[memu_write_addr] = 0;
-                }
             }
             if mdu_write_valid {
                 prf_busy[mdu_write_addr] = 0;
-                if branch_checkpoint
-                    || (branch_pending && (mdu_active_entry.rob_tag - rob_head_tag)
-                        <: (branch_rob_tag - rob_head_tag)) {
-                    prf_busy_checkpoint[mdu_write_addr] = 0;
-                }
             }
             if csru_write_valid {
                 prf_busy[csru_write_addr] = 0;
-                if branch_checkpoint
-                    || (branch_pending && (csru_active_entry.rob_tag - rob_head_tag)
-                        <: (branch_rob_tag - rob_head_tag)) {
-                    prf_busy_checkpoint[csru_write_addr] = 0;
-                }
+            }
+            if rollback_reg_fire {
+                prf_busy[rob_rollback_data.rd_preg] = 0;
             }
 
             // 新規割当
@@ -313,8 +292,8 @@ module core (
     let ids_is_control: logic = ids_is_jalr || inst_is_br(ids_ctrl) || ids_ctrl.is_csr || ids_is_fence_i;
 
     always_comb {
-        i_membus.rready = !serial_pending && !(branch_pending && ids_is_control) && rob_allocate_ready
-            && ids_target_ready && ids_preg_ready;
+        i_membus.rready = !control_hazard && !rob_rollback_busy && !serial_pending
+            && !(branch_pending && ids_is_control) && rob_allocate_ready && ids_target_ready && ids_preg_ready;
     }
 
     always_comb {
@@ -381,7 +360,6 @@ module core (
         rob_allocate_data.expt       = ids_expt;
         rob_allocate_data.raise_trap = 0;
 
-        branch_checkpoint = ids_fire && inst_is_br(ids_ctrl);
     }
 
     always_comb {
@@ -512,6 +490,7 @@ module core (
     var mdu_result      : UIntX;
     var mdu_result_valid: logic;
     var mdu_busy        : logic;
+    var mdu_kill        : logic;
 
     inst mdu: muldivunit (
         clk                            ,
@@ -530,8 +509,7 @@ module core (
         if_reset {
             mdu_busy         = 0;
             mdu_active_entry = '0;
-        } else if csr_redirect
-            || (branch_redirect && (mdu_active_entry.rob_tag - rob_head_tag) >: (alu_rdata.rob_tag - rob_head_tag)) {
+        } else if mdu_kill {
             mdu_busy         = 0;
             mdu_active_entry = '0;
         } else {
@@ -648,7 +626,12 @@ module core (
         // MEMはROB先頭かつoperand readyなら実行開始・継続
         memu_grant = memu_at_head && memu_sources_ready;
         // MDUはMDUがidleなら実行開始・継続
-        mdu_grant = mdu_rvalid && mdu_ready && !mdu_busy;
+        // 分岐回復と同じcycleに発行すると、queueから消えたyoung命令が
+        // MDUへ入ってしまうため、回復完了後のcycleで再発行する。
+        mdu_grant = mdu_rvalid && mdu_ready && !mdu_busy && !branch_redirect && !csr_redirect;
+        mdu_kill  = csr_redirect
+            || (branch_redirect && mdu_busy && (mdu_active_entry.rob_tag - rob_head_tag)
+                >: (alu_rdata.rob_tag - rob_head_tag));
         // CSRはROB先頭かつoperand readyなら実行
         csru_issue = csru_at_head && csru_sources_ready && !csru_active_valid;
         csru_grant = csru_active_valid;
@@ -658,7 +641,7 @@ module core (
 
     always_comb {
         alu_complete  = alu_grant;
-        mdu_complete  = mdu_busy && mdu_result_valid;
+        mdu_complete  = mdu_busy && mdu_result_valid && !mdu_kill;
         memu_complete = memu_grant && !memu_stall;
         csru_complete = csru_grant;
     }
@@ -756,7 +739,7 @@ module core (
             branch_rob_tag = 0;
         } else if alu_complete && alu_is_br {
             branch_pending = 0;
-        } else if branch_checkpoint {
+        } else if ids_fire && inst_is_br(ids_ctrl) {
             branch_pending = 1;
             branch_rob_tag = rob_allocate_tag;
         }
@@ -787,10 +770,13 @@ module core (
 
     always_comb {
         // WB -> END
-        rob_commit_ready = 1;
+        rob_commit_ready   = !rob_rollback_busy;
+        rob_rollback_ready = !rob_rollback_data.ctrl.rwb_en || rob_rollback_data.rd_areg == 0 || flist_wready;
+        rollback_fire      = rob_rollback_valid && rob_rollback_ready;
+        rollback_reg_fire  = rollback_fire && rob_rollback_data.ctrl.rwb_en && rob_rollback_data.rd_areg != 0;
 
-        flist_wvalid = rob_commit_fire;
-        flist_wdata  = rob_commit_data.old_preg;
+        flist_wvalid = rollback_reg_fire || rob_commit_fire;
+        flist_wdata  = if rollback_reg_fire ? rob_rollback_data.rd_preg : rob_commit_data.old_preg;
     }
 
     ///////////////////////////////// Pipeline trace /////////////////////////////////
@@ -1001,8 +987,12 @@ module core (
         // トラップはROB先頭でのみ受理するため、ここで全破棄できる
         flush: csr_redirect,
 
-        partial_flush    : branch_redirect  ,
-        partial_flush_tag: alu_rdata.rob_tag,
+        rollback_start: branch_redirect   ,
+        rollback_tag  : alu_rdata.rob_tag ,
+        rollback_valid: rob_rollback_valid,
+        rollback_ready: rob_rollback_ready,
+        rollback_data : rob_rollback_data ,
+        rollback_busy : rob_rollback_busy ,
 
         allocate_valid: rob_allocate_valid,
         allocate_ready: rob_allocate_ready,
@@ -1035,32 +1025,32 @@ module core (
     );
 
     inst flist: free_list (
-        clk                          ,
-        rst                          ,
-        checkpoint: branch_checkpoint,
-        restore   : branch_redirect  ,
-        rready    : flist_rready     ,
-        rvalid    : flist_rvalid     ,
-        rdata     : flist_rdata      ,
-        wready    : flist_wready     ,
-        wvalid    : flist_wvalid     ,
-        wdata     : flist_wdata      ,
+        clk                     ,
+        rst                     ,
+        checkpoint: 0           ,
+        restore   : 0           ,
+        rready    : flist_rready,
+        rvalid    : flist_rvalid,
+        rdata     : flist_rdata ,
+        wready    : flist_wready,
+        wvalid    : flist_wvalid,
+        wdata     : flist_wdata ,
     );
 
     inst rat: register_alias_table (
-        clk                           ,
-        rst                           ,
-        flush      : rat_flush        ,
-        checkpoint : branch_checkpoint,
-        restore    : branch_redirect  ,
-        read1_addr : rat_read1_addr   ,
-        read1_data : rat_read1_data   ,
-        read2_addr : rat_read2_addr   ,
-        read2_data : rat_read2_data   ,
-        write_valid: rat_write_valid  ,
-        write_addr : rat_write_addr   ,
-        write_data : rat_write_data   ,
-        write_old  : rat_write_old    ,
+        clk                         ,
+        rst                         ,
+        flush      : rat_flush      ,
+        checkpoint : 0              ,
+        restore    : 0              ,
+        read1_addr : rat_read1_addr ,
+        read1_data : rat_read1_data ,
+        read2_addr : rat_read2_addr ,
+        read2_data : rat_read2_data ,
+        write_valid: rat_write_valid,
+        write_addr : rat_write_addr ,
+        write_data : rat_write_data ,
+        write_old  : rat_write_old  ,
     );
 
     inst prf: physical_register_file (

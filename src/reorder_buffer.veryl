@@ -6,8 +6,12 @@ module reorder_buffer #(
     rst  : input reset,
     flush: input logic,
 
-    partial_flush    : input logic       ,
-    partial_flush_tag: input logic<WIDTH>,
+    rollback_start: input  logic           ,
+    rollback_tag  : input  logic    <WIDTH>,
+    rollback_valid: output logic           ,
+    rollback_ready: input  logic           ,
+    rollback_data : output DATA_TYPE       ,
+    rollback_busy : output logic           ,
 
     // EXから新しい命令を登録する (allocate)
     allocate_valid: input  logic           ,
@@ -51,42 +55,53 @@ module reorder_buffer #(
             $fatal(1, "reorder_buffer requires WIDTH > 1");
         }
     } else {
-        type Ptr        = logic<WIDTH>;
-        var head      : Ptr         ;
-        var tail      : Ptr         ;
-        let tail_plus1: Ptr          = tail + 1 as Ptr;
-        let full      : logic        = tail_plus1 == head;
+        type Ptr               = logic<WIDTH>;
+        var head             : Ptr         ;
+        var tail             : Ptr         ;
+        var rollback_tail    : Ptr         ;
+        var rollback_boundary: Ptr         ;
+        var rollback_active  : logic       ;
+        let tail_plus1       : Ptr          = tail + 1 as Ptr;
+        let full             : logic        = tail_plus1 == head;
 
         // 実際に成立（発火）したか
         let commit_fire  : logic = commit_valid && commit_ready;
         let allocate_fire: logic = allocate_valid && allocate_ready;
+        let rollback_fire: logic = rollback_valid && rollback_ready;
 
         var mem      : DATA_TYPE [2 ** WIDTH];
         var completed: logic     [2 ** WIDTH];
 
         always_comb {
             // ROB head
-            head_valid = head != tail;
-            head_tag   = head;
+            head_valid     = head != tail;
+            head_tag       = head;
+            rollback_busy  = rollback_active;
+            rollback_valid = rollback_active && rollback_tail != rollback_boundary;
+            rollback_data  = mem[rollback_tail - 1 as Ptr];
 
             // commit
-            commit_valid = head_valid && completed[head];
+            commit_valid = head_valid && completed[head] && !(rollback_active && head == rollback_tag);
             commit_data  = mem[head];
 
             // allocate
-            allocate_ready = !full || commit_fire;
+            allocate_ready = (!rollback_active) && (!full || commit_fire);
             allocate_tag   = tail;
         }
 
         #[allow(missing_reset_statement)]
         always_ff {
             if_reset {
-                head = 0;
-                tail = 0;
+                head              = 0;
+                tail              = 0;
+                rollback_tail     = 0;
+                rollback_boundary = 0;
+                rollback_active   = 0;
             } else {
                 if flush {
-                    head = 0;
-                    tail = 0;
+                    head            = 0;
+                    tail            = 0;
+                    rollback_active = 0;
                 } else {
                     if allocate_fire {
                         mem[tail]       = allocate_data;
@@ -113,8 +128,17 @@ module reorder_buffer #(
                         completed[head] = 0;
                         head            = head + 1;
                     }
-                    if partial_flush {
-                        tail = partial_flush_tag + 1 as Ptr;
+                    if rollback_start {
+                        rollback_tail     = tail;
+                        rollback_boundary = rollback_tag + 1 as Ptr;
+                        rollback_active   = tail != rollback_tag + 1 as Ptr;
+                    }
+                    if rollback_fire {
+                        rollback_tail = rollback_tail - 1 as Ptr;
+                        if rollback_tail - 1 as Ptr == rollback_boundary {
+                            tail            = rollback_boundary;
+                            rollback_active = 0;
+                        }
                     }
                 }
             }

@@ -19,56 +19,68 @@ module memory_queue (
     rvalid: output logic   ,
     rdata : output euq_type,
 ) {
-    type Ptr  = logic   <3>    ;
-    var head: Ptr            ;
-    var tail: Ptr            ;
-    var mem : euq_type    [8];
+    // An 8-slot ring FIFO has the same 7-entry effective capacity.
+    var entries     : euq_type    [7];
+    var entries_next: euq_type    [7];
+    var count       : logic   <3>    ;
+    var count_next  : logic   <3>    ;
+    var keep_count  : logic   <3>    ;
 
-    let tail_plus1: Ptr   = tail + 1;
-    let full      : logic = tail_plus1 == head;
-    let pop       : logic = rready && rvalid;
-
-    var squash_tail: Ptr;
     always_comb {
-        rvalid = head != tail;
-        rdata  = mem[head];
-        wready = !full;
+        rvalid = count != 0;
+        rdata  = entries[0];
+        wready = count != 7;
+    }
 
-        squash_tail   = tail;
-        var found_younger: logic;
-        var scanning     : logic;
-        found_younger = 0;
-        scanning      = head != tail;
-        for i in 0..8 {
-            let index: Ptr = head + i as Ptr;
-            if scanning && !found_younger && (mem[index].rob_tag - squash_head) >: (squash_tag - squash_head) {
-                squash_tail   = index;
-                found_younger = 1;
+    always_comb {
+        entries_next = entries;
+        count_next   = count;
+
+        if rvalid && rready {
+            for i in 0..6 {
+                entries_next[i] = entries_next[i + 1];
             }
-            if scanning && index + 1 == tail {
-                scanning = 0;
+            entries_next[6] =  '0;
+            count_next      -= 1;
+        }
+
+        if wvalid && wready {
+            entries_next[count_next] =  wdata;
+            count_next               += 1;
+        }
+
+        // Younger entries are a suffix because insertion is in program order.
+        keep_count = 0;
+        if squash {
+            for i in 0..7 {
+                if i <: count_next && !((entries_next[i].rob_tag - squash_head) >: (squash_tag - squash_head)) {
+                    keep_count += 1;
+                }
             }
+            for i in 0..7 {
+                if i >: keep_count {
+                    entries_next[i] = '0;
+                }
+            }
+            count_next = keep_count;
         }
     }
 
     #[allow(missing_reset_statement)]
     always_ff {
         if_reset {
-            head = 0;
-            tail = 0;
+            count = 0;
+            for i in 0..7 {
+                entries[i] = '0;
+            }
         } else if flush {
-            head = 0;
-            tail = 0;
+            count = 0;
+            for i in 0..7 {
+                entries[i] = '0;
+            }
         } else {
-            if squash {
-                tail = squash_tail;
-            } else if wready && wvalid {
-                mem[tail] = wdata;
-                tail      = tail + 1;
-            }
-            if pop {
-                head = head + 1;
-            }
+            entries = entries_next;
+            count   = count_next;
         }
     }
 }
