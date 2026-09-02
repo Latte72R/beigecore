@@ -134,8 +134,10 @@ module issue_queue (
         // the resolving branch form one suffix.  Keep only the older prefix.
         if squash {
             for i in 0..4 {
-                squash_keep[i] = entries_next[i].valid
-                    && !((entries_next[i].data.rob_tag - squash_head) >: (squash_tag - squash_head));
+                // branch_redirect時はcontrol_hazardでissue/dispatchが止まるため、
+                // recovery対象は現在のentryだけで判定できる。
+                squash_keep[i] = entries[i].valid
+                    && !((entries[i].data.rob_tag - squash_head) >: (squash_tag - squash_head));
                 if !squash_keep[i] {
                     entries_next[i].valid = 0;
                 }
