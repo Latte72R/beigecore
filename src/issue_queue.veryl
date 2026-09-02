@@ -39,6 +39,7 @@ module issue_queue (
         data     : euq_type,
         rs1_ready: logic   ,
         rs2_ready: logic   ,
+        ready    : logic   ,
     }
 
     var entries     : issue_entry_type    [4];
@@ -53,10 +54,10 @@ module issue_queue (
     var squash_sum1   : logic<2> [2];
     var squash_sum2   : logic<3>    ;
 
-    let ready0: logic = entries[0].valid && entries[0].rs1_ready && entries[0].rs2_ready;
-    let ready1: logic = entries[1].valid && entries[1].rs1_ready && entries[1].rs2_ready;
-    let ready2: logic = entries[2].valid && entries[2].rs1_ready && entries[2].rs2_ready;
-    let ready3: logic = entries[3].valid && entries[3].rs1_ready && entries[3].rs2_ready;
+    let ready0: logic = entries[0].valid && entries[0].ready;
+    let ready1: logic = entries[1].valid && entries[1].ready;
+    let ready2: logic = entries[2].valid && entries[2].ready;
+    let ready3: logic = entries[3].valid && entries[3].ready;
 
     // readyなentryのうち最も古いものを選択する
     always_comb {
@@ -108,6 +109,8 @@ module issue_queue (
                 || (wakeup3_valid && entries[i].data.rs2_preg == wakeup3_preg) {
                 entries_next[i].rs2_ready = 1;
             }
+
+            entries_next[i].ready = entries_next[i].rs1_ready && entries_next[i].rs2_ready;
         }
 
         // issueされたentryを削除し後続entryを1つ前へ詰める
@@ -128,6 +131,7 @@ module issue_queue (
             entries_next[write_index].data      =  wdata;
             entries_next[write_index].rs1_ready =  wrs1ready;
             entries_next[write_index].rs2_ready =  wrs2ready;
+            entries_next[write_index].ready     =  wrs1ready && wrs2ready;
             count_next                          += 1;
         }
 
