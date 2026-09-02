@@ -52,17 +52,18 @@ module memory_queue (
     var tail_ptr    : logic            <3>    ;
     var tail_next   : logic            <3>    ;
     var keep_count  : logic            <3>    ;
+    var head_entry  : memory_entry_type       ;
 
     // この段階ではMemory Queue内の順序をFIFOで保つ。
     // ROB head制約は外すが、Load/Storeのメモリ順序は後でdisambiguationを
     // 追加するまで崩さない。
-    let head_ready       : logic = count != 0 && entries[head_ptr].rs1_ready && entries[head_ptr].rs2_ready;
-    let lock_matches_head: logic = !lock_valid || (count != 0 && entries[head_ptr].data.rob_tag == lock_tag);
+    let head_ready       : logic = count != 0 && head_entry.rs1_ready && head_entry.rs2_ready;
+    let lock_matches_head: logic = !lock_valid || (count != 0 && head_entry.data.rob_tag == lock_tag);
 
     always_comb {
         // MEMUが処理中ならready状態に関係なく同じheadを保持する。
         rvalid = count != 0 && lock_matches_head && (lock_valid || head_ready);
-        rdata  = entries[head_ptr].data;
+        rdata  = head_entry.data;
         wready = count != 7;
     }
 
@@ -119,16 +120,18 @@ module memory_queue (
     #[allow(missing_reset_statement)]
     always_ff {
         if_reset {
-            count    = 0;
-            head_ptr = 0;
-            tail_ptr = 0;
+            count      = 0;
+            head_ptr   = 0;
+            tail_ptr   = 0;
+            head_entry = '0;
             for i in 0..8 {
                 entries[i] = '0;
             }
         } else if flush {
-            count    = 0;
-            head_ptr = 0;
-            tail_ptr = 0;
+            count      = 0;
+            head_ptr   = 0;
+            tail_ptr   = 0;
+            head_entry = '0;
             for i in 0..8 {
                 entries[i] = '0;
             }
@@ -138,6 +141,27 @@ module memory_queue (
                 entries[tail_ptr].data      = wdata;
                 entries[tail_ptr].rs1_ready = wrs1ready;
                 entries[tail_ptr].rs2_ready = wrs2ready;
+            }
+
+            // headの内容は通常サイクルでは保持し、wakeup/pop時だけ更新する。
+            // 空queueへのpush、および最後のpopと同cycleのpushは新しい入力がheadになる。
+            if wvalid && wready && count == 0 {
+                head_entry.data      = wdata;
+                head_entry.rs1_ready = wrs1ready;
+                head_entry.rs2_ready = wrs2ready;
+            } else if rvalid && rready {
+                if wvalid && wready && count == 1 {
+                    head_entry.data      = wdata;
+                    head_entry.rs1_ready = wrs1ready;
+                    head_entry.rs2_ready = wrs2ready;
+                } else if count_next != 0 {
+                    head_entry = entries_next[head_next];
+                } else {
+                    head_entry = '0;
+                }
+            } else {
+                // wakeupでheadのready bitだけが変わる場合を反映する。
+                head_entry = entries_next[head_ptr];
             }
             count    = count_next;
             head_ptr = head_next;
