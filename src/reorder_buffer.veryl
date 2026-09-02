@@ -1,3 +1,5 @@
+import eei::*;
+
 module reorder_buffer #(
     param DATA_TYPE: type = logic,
     param WIDTH    : u32  = 2    ,
@@ -38,6 +40,15 @@ module reorder_buffer #(
     // head の情報（Storeの先頭判定につかう）
     head_valid: output logic       ,
     head_tag  : output logic<WIDTH>,
+
+    // rollback_tagより若いentryをyoungestから順に取り除く
+    rollback_start: input logic       ,
+    rollback_tag  : input logic<WIDTH>,
+
+    rollback_valid: output logic    , // rollback_dataが有効
+    rollback_ready: input  logic    , // core側がRAT/Free Listを復元可能
+    rollback_data : output DATA_TYPE, // 現在復元するROB entry
+    rollback_busy : output logic    , // rollback処理全体が進行中
 ) {
     if WIDTH <= 1 :invalid_width {
         initial {
@@ -50,6 +61,13 @@ module reorder_buffer #(
         let tail_plus1: Ptr          = tail + 1 as Ptr;
         let full      : logic        = tail_plus1 == head;
 
+        // ROB末尾からrollback境界へ向かって走査する現在位置
+        var rollback_cursor: Ptr;
+        // rollback_tag自身は残すため最後に破棄するのはその次のentry
+        let rollback_stop_tag: Ptr = rollback_tag + 1 as Ptr;
+        // 開始cycleを含めallocateとcommitを停止する
+        let rollback_active: logic = rollback_start || rollback_busy;
+
         // 実際に成立（発火）したか
         let commit_fire  : logic = commit_valid && commit_ready;
         let allocate_fire: logic = allocate_valid && allocate_ready;
@@ -58,17 +76,17 @@ module reorder_buffer #(
         var completed: logic     [2 ** WIDTH];
 
         always_comb {
-            // ROB head
             head_valid = head != tail;
             head_tag   = head;
 
-            // commit
-            commit_valid = head_valid && completed[head];
+            commit_valid = !rollback_active && head_valid && completed[head];
             commit_data  = mem[head];
 
-            // allocate
-            allocate_ready = !full || commit_fire;
+            allocate_ready = !rollback_active && (!full || commit_fire);
             allocate_tag   = tail;
+
+            rollback_valid = rollback_busy;
+            rollback_data  = mem[rollback_cursor];
         }
 
         #[allow(missing_reset_statement)]
@@ -76,16 +94,18 @@ module reorder_buffer #(
             if_reset {
                 head = 0;
                 tail = 0;
+
+                rollback_cursor = 0;
+                rollback_busy   = 0;
             } else {
                 if flush {
                     head = 0;
                     tail = 0;
+
+                    rollback_cursor = 0;
+                    rollback_busy   = 0;
                 } else {
-                    if allocate_fire {
-                        mem[tail]       = allocate_data;
-                        completed[tail] = allocate_done;
-                        tail            = tail + 1;
-                    }
+                    // completion更新はrollback開始cycleでも受理する
                     if complete0_valid {
                         completed[complete0_tag] = 1;
                     }
@@ -101,6 +121,35 @@ module reorder_buffer #(
                     if commit_fire {
                         completed[head] = 0;
                         head            = head + 1;
+                    }
+
+                    if rollback_start {
+                        // tailは次の空きslotなので、youngestはtail-1
+                        if tail != rollback_stop_tag {
+                            rollback_cursor = tail - 1;
+                            rollback_busy   = 1;
+                        } else {
+                            // branchより若い命令がない
+                            rollback_busy = 0;
+                        }
+                    } else if rollback_busy {
+                        if rollback_valid && rollback_ready {
+                            // cursorのentryを破棄
+                            completed[rollback_cursor] = 0;
+                            tail                       = rollback_cursor;
+
+                            if rollback_cursor == rollback_stop_tag {
+                                rollback_busy = 0;
+                            } else {
+                                rollback_cursor = rollback_cursor - 1;
+                            }
+                        }
+                    }
+
+                    if allocate_fire {
+                        mem[tail]       = allocate_data;
+                        completed[tail] = allocate_done;
+                        tail            = tail + 1;
                     }
                 }
             }

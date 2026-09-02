@@ -31,7 +31,7 @@ KONATA_RAW ?= results/konata.raw
 
 SYNTH_TOP ?= top
 SYNTH_PARTS ?= core inst_fetcher amounit mmio_controller aclint_memory uart16550
-TIMING_PATHS ?= 3
+TIMING_PATHS ?= 1
 
 RV_TEST_DIR ?= test/share/riscv-tests
 # rv64ua-p- は除外

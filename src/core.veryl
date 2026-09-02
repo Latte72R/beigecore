@@ -23,6 +23,20 @@ module core (
     var rob_head_valid: logic ;
     var rob_head_tag  : RobTag;
 
+    var rob_rollback_start: logic         ;
+    var rob_rollback_tag  : RobTag        ;
+    var rob_rollback_valid: logic         ;
+    var rob_rollback_ready: logic         ;
+    var rob_rollback_data : rob_entry_type;
+    var rob_rollback_busy : logic         ;
+
+    let rob_rollback_fire: logic = rob_rollback_valid && rob_rollback_ready;
+
+    always_comb {
+        rob_rollback_start = 0;
+        rob_rollback_tag   = 0;
+    }
+
     ///////////////////////////////// IF Stage /////////////////////////////////
 
     var control_hazard        : logic;
@@ -131,15 +145,23 @@ module core (
 
     let rename_fire: logic = ids_fire && ids_writes_rd;
 
+    let rollback_restores_rd: logic = rob_rollback_fire && rob_rollback_data.rd_areg != 0;
+
     always_comb {
         flist_rready = rename_fire;
 
         rat_read1_addr = ids_rs1_areg;
         rat_read2_addr = ids_rs2_areg;
 
-        rat_write_valid = rename_fire;
-        rat_write_addr  = ids_rd_areg;
-        rat_write_data  = ids_new_preg;
+        // RAT writeはrollback優先
+        rat_write_valid = rollback_restores_rd || rename_fire;
+        if rollback_restores_rd {
+            rat_write_addr = rob_rollback_data.rd_areg;
+            rat_write_data = rob_rollback_data.old_preg;
+        } else {
+            rat_write_addr = ids_rd_areg;
+            rat_write_data = ids_new_preg;
+        }
 
         rat_flush = control_hazard;
     }
@@ -238,6 +260,9 @@ module core (
             if csru_write_valid {
                 prf_busy[csru_write_addr] = 0;
             }
+            if rollback_restores_rd {
+                prf_busy[rob_rollback_data.rd_preg] = 0;
+            }
 
             // 新規割当
             if rename_fire {
@@ -273,7 +298,8 @@ module core (
             ids_pre_is_csr   : csru_wready,
             default          : alu_wready,
         };
-        i_membus.rready = !serial_pending && rob_allocate_ready && ids_target_ready && ids_preg_ready;
+        i_membus.rready = !rob_rollback_busy && !rob_rollback_start && !serial_pending && rob_allocate_ready
+            && ids_target_ready && ids_preg_ready;
 
         // 該当キューの wvalid / wdata を駆動
         alu_wvalid  = ids_fire && ids_is_alu && alu_wready;
@@ -661,10 +687,17 @@ module core (
 
     always_comb {
         // WB -> END
-        rob_commit_ready = 1;
+        rob_commit_ready = !rob_rollback_busy && !rob_rollback_start;
 
-        flist_wvalid = rob_commit_fire;
-        flist_wdata  = rob_commit_data.old_preg;
+        // Free Listはrollback優先
+        flist_wvalid = rollback_restores_rd || rob_commit_fire;
+        if rollback_restores_rd {
+            flist_wdata = rob_rollback_data.rd_preg;
+        } else {
+            flist_wdata = rob_commit_data.old_preg;
+        }
+
+        rob_rollback_ready = 1;
     }
 
     ///////////////////////////////// Pipeline trace /////////////////////////////////
@@ -873,6 +906,13 @@ module core (
 
         head_valid: rob_head_valid,
         head_tag  : rob_head_tag  ,
+
+        rollback_start: rob_rollback_start,
+        rollback_tag  : rob_rollback_tag  ,
+        rollback_valid: rob_rollback_valid,
+        rollback_ready: rob_rollback_ready,
+        rollback_data : rob_rollback_data ,
+        rollback_busy : rob_rollback_busy ,
     );
 
     inst flist: free_list (
