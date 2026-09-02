@@ -43,33 +43,35 @@ module memory_queue (
         rs2_ready: logic   ,
     }
 
-    var entries        : memory_entry_type    [8];
-    var entries_next   : memory_entry_type    [8];
-    var valid          : logic                [8];
-    var valid_next     : logic                [8];
-    var count          : logic            <3>    ;
-    var count_next     : logic            <3>    ;
-    var head_ptr       : logic            <3>    ;
-    var head_next      : logic            <3>    ;
-    var tail_ptr       : logic            <3>    ;
-    var tail_next      : logic            <3>    ;
-    var keep_count     : logic            <3>    ;
-    var head_entry     : memory_entry_type       ;
-    var next_head_entry: memory_entry_type       ;
-    var squash_keep    : logic                [8];
-    var squash_sum1    : logic            <2> [4];
-    var squash_sum2    : logic            <3> [2];
-    var squash_sum3    : logic            <4>    ;
+    var entries           : memory_entry_type    [8];
+    var entries_next      : memory_entry_type    [8];
+    var valid             : logic                [8];
+    var valid_next        : logic                [8];
+    var count             : logic            <3>    ;
+    var count_next        : logic            <3>    ;
+    var head_ptr          : logic            <3>    ;
+    var head_next         : logic            <3>    ;
+    var tail_ptr          : logic            <3>    ;
+    var tail_next         : logic            <3>    ;
+    var keep_count        : logic            <3>    ;
+    var head_entry        : memory_entry_type       ;
+    var next_head_entry   : memory_entry_type       ;
+    var head_pending_entry: memory_entry_type       ;
+    var head_pending_valid: logic                   ;
+    var squash_keep       : logic                [8];
+    var squash_sum1       : logic            <2> [4];
+    var squash_sum2       : logic            <3> [2];
+    var squash_sum3       : logic            <4>    ;
 
     // この段階ではMemory Queue内の順序をFIFOで保つ。
     // ROB head制約は外すが、Load/Storeのメモリ順序は後でdisambiguationを
     // 追加するまで崩さない。
-    let head_ready       : logic = count != 0 && head_entry.rs1_ready && head_entry.rs2_ready;
+    let head_ready       : logic = count != 0 && !head_pending_valid && head_entry.rs1_ready && head_entry.rs2_ready;
     let lock_matches_head: logic = !lock_valid || (count != 0 && head_entry.data.rob_tag == lock_tag);
 
     always_comb {
         // MEMUが処理中ならready状態に関係なく同じheadを保持する。
-        rvalid = count != 0 && lock_matches_head && (lock_valid || head_ready);
+        rvalid = count != 0 && !head_pending_valid && lock_matches_head && (lock_valid || head_ready);
         rdata  = head_entry.data;
         wready = count != 7;
     }
@@ -173,19 +175,23 @@ module memory_queue (
     #[allow(missing_reset_statement)]
     always_ff {
         if_reset {
-            count      = 0;
-            head_ptr   = 0;
-            tail_ptr   = 0;
-            head_entry = '0;
+            count              = 0;
+            head_ptr           = 0;
+            tail_ptr           = 0;
+            head_entry         = '0;
+            head_pending_entry = '0;
+            head_pending_valid = 0;
             for i in 0..8 {
                 entries[i] = '0;
                 valid[i]   = 0;
             }
         } else if flush {
-            count      = 0;
-            head_ptr   = 0;
-            tail_ptr   = 0;
-            head_entry = '0;
+            count              = 0;
+            head_ptr           = 0;
+            tail_ptr           = 0;
+            head_entry         = '0;
+            head_pending_entry = '0;
+            head_pending_valid = 0;
             for i in 0..8 {
                 entries[i] = '0;
                 valid[i]   = 0;
@@ -198,17 +204,33 @@ module memory_queue (
                 entries[tail_ptr].rs2_ready = wrs2ready;
             }
 
-            // headの内容は通常サイクルでは保持し、wakeup/pop時だけ更新する。
-            // 空queueへのpush、および最後のpopと同cycleのpushは新しい入力がheadになる。
-            if wvalid && wready && count == 0 {
+            // dispatch入力をheadへ直送せず、1段のpendingレジスタで受ける。
+            // これによりfrontendからhead_entry Dまでの経路を分割する。
+            if head_pending_valid {
+                head_entry = head_pending_entry;
+                if (wakeup0_valid && head_pending_entry.data.rs1_preg == wakeup0_preg)
+                    || (wakeup1_valid && head_pending_entry.data.rs1_preg == wakeup1_preg)
+                    || (wakeup2_valid && head_pending_entry.data.rs1_preg == wakeup2_preg)
+                    || (wakeup3_valid && head_pending_entry.data.rs1_preg == wakeup3_preg) {
+                    head_entry.rs1_ready = 1;
+                }
+                if (wakeup0_valid && head_pending_entry.data.rs2_preg == wakeup0_preg)
+                    || (wakeup1_valid && head_pending_entry.data.rs2_preg == wakeup1_preg)
+                    || (wakeup2_valid && head_pending_entry.data.rs2_preg == wakeup2_preg)
+                    || (wakeup3_valid && head_pending_entry.data.rs2_preg == wakeup3_preg) {
+                    head_entry.rs2_ready = 1;
+                }
+                head_pending_valid = 0;
+            } else if wvalid && wready && count == 0 {
                 head_entry.data      = wdata;
                 head_entry.rs1_ready = wrs1ready;
                 head_entry.rs2_ready = wrs2ready;
             } else if rvalid && rready {
                 if wvalid && wready && count == 1 {
-                    head_entry.data      = wdata;
-                    head_entry.rs1_ready = wrs1ready;
-                    head_entry.rs2_ready = wrs2ready;
+                    head_pending_entry.data      = wdata;
+                    head_pending_entry.rs1_ready = wrs1ready;
+                    head_pending_entry.rs2_ready = wrs2ready;
+                    head_pending_valid           = 1;
                 } else {
                     head_entry = next_head_entry;
                 }
