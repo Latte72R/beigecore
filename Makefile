@@ -1,3 +1,8 @@
+# コマンドラインで-jが指定されていなければ全CPUを使用する
+ifeq ($(filter -j% --jobs%,$(MAKEFLAGS)),)
+MAKEFLAGS += -j$(shell nproc)
+endif
+
 PROJECT := core
 SIM_TOP := top
 

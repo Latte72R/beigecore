@@ -1,0 +1,89 @@
+module dual_port_memory::<DATA_WIDTH: u32, ADDR_WIDTH: u32> #(
+    param FILEPATH_IS_ENV: logic  = 0 ,
+    param FILEPATH       : string = "",
+) (
+    clk     : input   clock                                     ,
+    rst     : input   reset                                     ,
+    i_membus: modport membus_if::<DATA_WIDTH, ADDR_WIDTH>::slave,
+    d_membus: modport membus_if::<DATA_WIDTH, ADDR_WIDTH>::slave,
+) {
+    type DataType = logic<DATA_WIDTH>;
+
+    #[allow(initial_assign)]
+    var mem: DataType [2 ** ADDR_WIDTH];
+
+    initial {
+        if FILEPATH != "" {
+            if FILEPATH_IS_ENV {
+                $readmemh(util::get_env(FILEPATH), mem);
+            } else {
+                $readmemh(FILEPATH, mem);
+            }
+        }
+    }
+
+    // I-portはread-onlyで，D-portの状態に関係なく受理する
+    always_comb {
+        i_membus.ready = 1;
+    }
+
+    always_ff {
+        if_reset {
+            i_membus.rvalid = 0;
+            i_membus.rdata  = 0;
+        } else {
+            i_membus.rvalid = i_membus.valid;
+            if i_membus.valid {
+                i_membus.rdata = mem[i_membus.addr];
+            }
+        }
+    }
+
+    // D-port は readまたはwrite
+    enum State {
+        Ready,
+        WriteValid,
+    }
+    var state      : State               ;
+    var addr_saved : logic   <ADDR_WIDTH>;
+    var wdata_saved: DataType            ;
+    var wmask_saved: logic   <DATA_WIDTH>;
+    var rdata_saved: DataType            ;
+    always_comb {
+        d_membus.ready = state == State::Ready;
+    }
+    always_ff {
+        if state == State::WriteValid {
+            mem[addr_saved[ADDR_WIDTH - 1:0]] = wdata_saved & wmask_saved | rdata_saved & ~wmask_saved;
+        }
+    }
+    always_ff {
+        if_reset {
+            state           = State::Ready;
+            d_membus.rvalid = 0;
+            d_membus.rdata  = 0;
+            addr_saved      = 0;
+            wdata_saved     = 0;
+            wmask_saved     = 0;
+            rdata_saved     = 0;
+        } else {
+            case state {
+                State::Ready: {
+                    d_membus.rvalid = d_membus.valid & !d_membus.wen;
+                    d_membus.rdata  = mem[d_membus.addr[ADDR_WIDTH - 1:0]];
+                    addr_saved      = d_membus.addr[ADDR_WIDTH - 1:0];
+                    wdata_saved     = d_membus.wdata;
+                    wmask_saved     = d_membus.wmask_expand();
+                    rdata_saved     = mem[d_membus.addr[ADDR_WIDTH - 1:0]];
+                    if d_membus.valid && d_membus.wen {
+                        state = State::WriteValid;
+                    }
+                }
+                State::WriteValid: {
+                    state           = State::Ready;
+                    d_membus.rvalid = 1;
+                }
+            }
+        }
+    }
+}

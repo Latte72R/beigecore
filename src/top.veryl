@@ -31,8 +31,10 @@ module top #(
     inst mmio_membus    : Membus;
     inst mmio_ram_membus: Membus;
     inst mmio_rom_membus: Membus;
-    inst ram_membus     : membus_if::<RAM_DATA_WIDTH, RAM_ADDR_WIDTH>;
-    inst rom_membus     : membus_if::<ROM_DATA_WIDTH, ROM_ADDR_WIDTH>;
+    inst i_ram_membus   : membus_if::<RAM_DATA_WIDTH, RAM_ADDR_WIDTH>;
+    inst d_ram_membus   : membus_if::<RAM_DATA_WIDTH, RAM_ADDR_WIDTH>;
+    inst i_rom_membus   : membus_if::<ROM_DATA_WIDTH, ROM_ADDR_WIDTH>;
+    inst d_rom_membus   : membus_if::<ROM_DATA_WIDTH, ROM_ADDR_WIDTH>;
     inst dbg_membus     : Membus;
     inst aclint_membus  : Membus;
 
@@ -62,64 +64,64 @@ module top #(
         uart  : uart_backend,
     );
 
-    var memarb_last_i: logic;
+    let i_select_rom: logic = MMAP_ROM_BEGIN <= i_membus.addr && i_membus.addr <= MMAP_ROM_END;
+    let i_select_ram: logic = i_membus.addr >= MMAP_RAM_BEGIN;
 
-    // mmio_controllerへのメモリアクセスを調停する
-    always_ff {
-        if_reset {
-            memarb_last_i = 0;
-        } else {
-            if mmio_membus.ready {
-                memarb_last_i = !d_membus.valid;
-            }
-        }
+    always_comb {
+        i_ram_membus.valid = i_membus.valid && i_select_ram;
+        i_ram_membus.addr  = addr_to_memaddr::<RAM_DATA_WIDTH, RAM_ADDR_WIDTH>(i_membus.addr - MMAP_RAM_BEGIN);
+        i_ram_membus.wen   = 0;
+        i_ram_membus.wdata = 0;
+        i_ram_membus.wmask = 0;
+
+        i_rom_membus.valid = i_membus.valid && i_select_rom;
+        i_rom_membus.addr  = addr_to_memaddr::<ROM_DATA_WIDTH, ROM_ADDR_WIDTH>(i_membus.addr - MMAP_ROM_BEGIN);
+        i_rom_membus.wen   = 0;
+        i_rom_membus.wdata = 0;
+        i_rom_membus.wmask = 0;
+
+        i_membus.ready = (i_select_ram && i_ram_membus.ready) || (i_select_rom && i_rom_membus.ready);
+
+        i_membus.rvalid = i_ram_membus.rvalid || i_rom_membus.rvalid;
+
+        i_membus.rdata = if i_rom_membus.rvalid ? i_rom_membus.rdata : i_ram_membus.rdata;
     }
 
     always_comb {
-        i_membus.ready  = mmio_membus.ready && !d_membus.valid;
-        i_membus.rvalid = mmio_membus.rvalid && memarb_last_i;
-        i_membus.rdata  = mmio_membus.rdata;
+        // D-portは従来どおりMMIO controllerへ接続
+        mmio_membus.valid = d_membus.valid;
+        mmio_membus.addr  = d_membus.addr;
+        mmio_membus.wen   = d_membus.wen;
+        mmio_membus.wdata = d_membus.wdata;
+        mmio_membus.wmask = d_membus.wmask;
 
         d_membus.ready  = mmio_membus.ready;
-        d_membus.rvalid = mmio_membus.rvalid && !memarb_last_i;
+        d_membus.rvalid = mmio_membus.rvalid;
         d_membus.rdata  = mmio_membus.rdata;
-
-        mmio_membus.valid = i_membus.valid | d_membus.valid;
-        if d_membus.valid {
-            mmio_membus.addr  = d_membus.addr;
-            mmio_membus.wen   = d_membus.wen;
-            mmio_membus.wdata = d_membus.wdata;
-            mmio_membus.wmask = d_membus.wmask;
-        } else {
-            mmio_membus.addr  = i_membus.addr;
-            mmio_membus.wen   = 0; // 命令フェッチは常に読み込み
-            mmio_membus.wdata = 'x;
-            mmio_membus.wmask = 'x;
-        }
     }
 
     always_comb {
         // mmio <> RAM
-        ram_membus.valid       = mmio_ram_membus.valid;
-        mmio_ram_membus.ready  = ram_membus.ready;
-        ram_membus.addr        = addr_to_memaddr::<RAM_DATA_WIDTH, RAM_ADDR_WIDTH>(mmio_ram_membus.addr);
-        ram_membus.wen         = mmio_ram_membus.wen;
-        ram_membus.wdata       = mmio_ram_membus.wdata;
-        ram_membus.wmask       = mmio_ram_membus.wmask;
-        mmio_ram_membus.rvalid = ram_membus.rvalid;
-        mmio_ram_membus.rdata  = ram_membus.rdata;
+        d_ram_membus.valid     = mmio_ram_membus.valid;
+        mmio_ram_membus.ready  = d_ram_membus.ready;
+        d_ram_membus.addr      = addr_to_memaddr::<RAM_DATA_WIDTH, RAM_ADDR_WIDTH>(mmio_ram_membus.addr);
+        d_ram_membus.wen       = mmio_ram_membus.wen;
+        d_ram_membus.wdata     = mmio_ram_membus.wdata;
+        d_ram_membus.wmask     = mmio_ram_membus.wmask;
+        mmio_ram_membus.rvalid = d_ram_membus.rvalid;
+        mmio_ram_membus.rdata  = d_ram_membus.rdata;
     }
 
     always_comb {
         // mmio <> ROM
-        rom_membus.valid       = mmio_rom_membus.valid;
-        mmio_rom_membus.ready  = rom_membus.ready;
-        rom_membus.addr        = addr_to_memaddr::<ROM_DATA_WIDTH, ROM_ADDR_WIDTH>(mmio_rom_membus.addr);
-        rom_membus.wen         = 0;
-        rom_membus.wdata       = 0;
-        rom_membus.wmask       = 0;
-        mmio_rom_membus.rvalid = rom_membus.rvalid;
-        mmio_rom_membus.rdata  = rom_membus.rdata;
+        d_rom_membus.valid     = mmio_rom_membus.valid;
+        mmio_rom_membus.ready  = d_rom_membus.ready;
+        d_rom_membus.addr      = addr_to_memaddr::<ROM_DATA_WIDTH, ROM_ADDR_WIDTH>(mmio_rom_membus.addr);
+        d_rom_membus.wen       = 0;
+        d_rom_membus.wdata     = 0;
+        d_rom_membus.wmask     = 0;
+        mmio_rom_membus.rvalid = d_rom_membus.rvalid;
+        mmio_rom_membus.rdata  = d_rom_membus.rdata;
     }
 
     inst fetcher: inst_fetcher (
@@ -129,22 +131,24 @@ module top #(
         mem_if : i_membus     ,
     );
 
-    inst ram: memory::<RAM_DATA_WIDTH, RAM_ADDR_WIDTH> #(
+    inst ram: dual_port_memory::<RAM_DATA_WIDTH, RAM_ADDR_WIDTH> #(
         FILEPATH_IS_ENV: RAM_FILEPATH_IS_ENV,
         FILEPATH       : RAM_FILEPATH       ,
     ) (
-        clk               ,
-        rst               ,
-        membus: ram_membus,
+        clk                   ,
+        rst                   ,
+        i_membus: i_ram_membus,
+        d_membus: d_ram_membus,
     );
 
-    inst rom: memory::<ROM_DATA_WIDTH, ROM_ADDR_WIDTH> #(
+    inst rom: dual_port_memory::<ROM_DATA_WIDTH, ROM_ADDR_WIDTH> #(
         FILEPATH_IS_ENV: ROM_FILEPATH_IS_ENV,
         FILEPATH       : ROM_FILEPATH       ,
     ) (
-        clk               ,
-        rst               ,
-        membus: rom_membus,
+        clk                   ,
+        rst                   ,
+        i_membus: i_rom_membus,
+        d_membus: d_rom_membus,
     );
 
     inst aclintm: aclint_memory (
