@@ -104,8 +104,9 @@ module issue_queue (
         }
 
         // 新しい末尾indexに書き込み
-        let write_index: logic<3> = count_next[2:0];
+        let write_index: logic<2> = count_next[1:0];
         if wvalid && wready {
+            entries_next[write_index].valid     =  1;
             entries_next[write_index].data      =  wdata;
             entries_next[write_index].rs1_ready =  wrs1ready;
             entries_next[write_index].rs2_ready =  wrs2ready;
@@ -123,6 +124,9 @@ module issue_queue (
             }
         } else if flush {
             count = 0;
+            for i in 0..4 {
+                entries[i].valid = 0;
+            }
         } else {
             entries = entries_next;
             count   = count_next;
