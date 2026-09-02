@@ -43,16 +43,21 @@ module memory_queue (
         rs2_ready: logic   ,
     }
 
-    var entries     : memory_entry_type    [8];
-    var entries_next: memory_entry_type    [8];
-    var count       : logic            <3>    ;
-    var count_next  : logic            <3>    ;
-    var head_ptr    : logic            <3>    ;
-    var head_next   : logic            <3>    ;
-    var tail_ptr    : logic            <3>    ;
-    var tail_next   : logic            <3>    ;
-    var keep_count  : logic            <3>    ;
-    var head_entry  : memory_entry_type       ;
+    var entries        : memory_entry_type    [8];
+    var entries_next   : memory_entry_type    [8];
+    var count          : logic            <3>    ;
+    var count_next     : logic            <3>    ;
+    var head_ptr       : logic            <3>    ;
+    var head_next      : logic            <3>    ;
+    var tail_ptr       : logic            <3>    ;
+    var tail_next      : logic            <3>    ;
+    var keep_count     : logic            <3>    ;
+    var head_entry     : memory_entry_type       ;
+    var next_head_entry: memory_entry_type       ;
+    var squash_keep    : logic                [8];
+    var squash_sum1    : logic            <2> [4];
+    var squash_sum2    : logic            <3> [2];
+    var squash_sum3    : logic            <4>    ;
 
     // この段階ではMemory Queue内の順序をFIFOで保つ。
     // ROB head制約は外すが、Load/Storeのメモリ順序は後でdisambiguationを
@@ -73,6 +78,31 @@ module memory_queue (
         head_next    = head_ptr;
         tail_next    = tail_ptr;
         keep_count   = 0;
+        for i in 0..8 {
+            squash_keep[i] = 0;
+        }
+        for i in 0..4 {
+            squash_sum1[i] = 0;
+        }
+        for i in 0..2 {
+            squash_sum2[i] = 0;
+        }
+        squash_sum3     = 0;
+        next_head_entry = entries[head_ptr + 1];
+
+        // pop後の次entryに同cycleのwakeupを反映する。
+        if (wakeup0_valid && next_head_entry.data.rs1_preg == wakeup0_preg)
+            || (wakeup1_valid && next_head_entry.data.rs1_preg == wakeup1_preg)
+            || (wakeup2_valid && next_head_entry.data.rs1_preg == wakeup2_preg)
+            || (wakeup3_valid && next_head_entry.data.rs1_preg == wakeup3_preg) {
+            next_head_entry.rs1_ready = 1;
+        }
+        if (wakeup0_valid && next_head_entry.data.rs2_preg == wakeup0_preg)
+            || (wakeup1_valid && next_head_entry.data.rs2_preg == wakeup1_preg)
+            || (wakeup2_valid && next_head_entry.data.rs2_preg == wakeup2_preg)
+            || (wakeup3_valid && next_head_entry.data.rs2_preg == wakeup3_preg) {
+            next_head_entry.rs2_ready = 1;
+        }
 
         // Wakeupは各entryのready bitだけを更新する。通常のpopでは
         // エントリを移動しないので、410-bitデータの前詰めが発生しない。
@@ -107,13 +137,19 @@ module memory_queue (
         // Ring FIFOでは、保持するprefixの長さからtailだけを再設定する。
         if squash {
             for i in 0..8 {
-                if i <: count_next
-                    && !((entries_next[head_next + i as 3].data.rob_tag - squash_head) >: (squash_tag - squash_head)) {
-                    keep_count += 1;
-                }
+                squash_keep[i] = i <: count_next
+                    && !((entries_next[head_next + i as 3].data.rob_tag - squash_head) >: (squash_tag - squash_head));
             }
-            tail_next  = head_next + keep_count;
-            count_next = keep_count;
+            squash_sum1[0] = {1'b0, squash_keep[0]} + {1'b0, squash_keep[1]};
+            squash_sum1[1] = {1'b0, squash_keep[2]} + {1'b0, squash_keep[3]};
+            squash_sum1[2] = {1'b0, squash_keep[4]} + {1'b0, squash_keep[5]};
+            squash_sum1[3] = {1'b0, squash_keep[6]} + {1'b0, squash_keep[7]};
+            squash_sum2[0] = {1'b0, squash_sum1[0]} + {1'b0, squash_sum1[1]};
+            squash_sum2[1] = {1'b0, squash_sum1[2]} + {1'b0, squash_sum1[3]};
+            squash_sum3    = {1'b0, squash_sum2[0]} + {1'b0, squash_sum2[1]};
+            keep_count     = squash_sum3[2:0];
+            tail_next      = head_next + keep_count;
+            count_next     = keep_count;
         }
     }
 
@@ -154,14 +190,23 @@ module memory_queue (
                     head_entry.data      = wdata;
                     head_entry.rs1_ready = wrs1ready;
                     head_entry.rs2_ready = wrs2ready;
-                } else if count_next != 0 {
-                    head_entry = entries_next[head_next];
                 } else {
-                    head_entry = '0;
+                    head_entry = next_head_entry;
                 }
             } else {
-                // wakeupでheadのready bitだけが変わる場合を反映する。
-                head_entry = entries_next[head_ptr];
+                // 通常サイクルはheadのデータを保持し、head自身のready bitだけ更新する。
+                if (wakeup0_valid && head_entry.data.rs1_preg == wakeup0_preg)
+                    || (wakeup1_valid && head_entry.data.rs1_preg == wakeup1_preg)
+                    || (wakeup2_valid && head_entry.data.rs1_preg == wakeup2_preg)
+                    || (wakeup3_valid && head_entry.data.rs1_preg == wakeup3_preg) {
+                    head_entry.rs1_ready = 1;
+                }
+                if (wakeup0_valid && head_entry.data.rs2_preg == wakeup0_preg)
+                    || (wakeup1_valid && head_entry.data.rs2_preg == wakeup1_preg)
+                    || (wakeup2_valid && head_entry.data.rs2_preg == wakeup2_preg)
+                    || (wakeup3_valid && head_entry.data.rs2_preg == wakeup3_preg) {
+                    head_entry.rs2_ready = 1;
+                }
             }
             count    = count_next;
             head_ptr = head_next;
