@@ -6,6 +6,9 @@ module reorder_buffer #(
     rst  : input reset,
     flush: input logic,
 
+    partial_flush    : input logic       ,
+    partial_flush_tag: input logic<WIDTH>,
+
     // EXから新しい命令を登録する (allocate)
     allocate_valid: input  logic           ,
     allocate_ready: output logic           ,
@@ -109,6 +112,9 @@ module reorder_buffer #(
                     if commit_fire {
                         completed[head] = 0;
                         head            = head + 1;
+                    }
+                    if partial_flush {
+                        tail = partial_flush_tag + 1 as Ptr;
                     }
                 }
             }

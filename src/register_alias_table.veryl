@@ -8,6 +8,9 @@ module register_alias_table (
     rst  : input reset,
     flush: input logic,
 
+    checkpoint: input logic,
+    restore   : input logic,
+
     // 読み出し
     read1_addr: input  ArchReg, // rs1
     read1_data: output PhysReg, // phys_rs1
@@ -22,7 +25,8 @@ module register_alias_table (
     write_old  : output PhysReg, // 書き込み前の値 (rename 時 ROB に格納)
 ) {
     #[sv("syn_ramstyle=\"registers\"")]
-    var mem: PhysReg [AREG_COUNT];
+    var mem           : PhysReg [AREG_COUNT];
+    var checkpoint_mem: PhysReg [AREG_COUNT];
 
     always_comb {
         read1_data = mem[read1_addr];
@@ -33,10 +37,22 @@ module register_alias_table (
     always_ff {
         if_reset {
             for i in 0..AREG_COUNT {
-                mem[i] = i as PhysReg; // x_i → p_i
+                mem[i]            = i as PhysReg; // x_i → p_i
+                checkpoint_mem[i] = i as PhysReg;
             }
-        } else if write_valid {
-            mem[write_addr] = write_data;
+        } else if restore {
+            for i in 0..AREG_COUNT {
+                mem[i] = checkpoint_mem[i];
+            }
+        } else {
+            if checkpoint {
+                for i in 0..AREG_COUNT {
+                    checkpoint_mem[i] = mem[i];
+                }
+            }
+            if write_valid {
+                mem[write_addr] = write_data;
+            }
         }
     }
 }

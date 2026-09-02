@@ -79,6 +79,7 @@ package corectrl {
         bits      : Inst         ,
         ctrl      : InstCtrl     ,
         rd_areg   : ArchReg      ,
+        rd_preg   : PhysReg      ,
         old_preg  : PhysReg      ,
         result    : UIntX        ,
         expt      : ExceptionInfo,

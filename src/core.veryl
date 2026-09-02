@@ -34,6 +34,8 @@ module core (
     var control_hazard_pc_next: Addr ;
     var fencei_redirect       : logic;
     var backend_redirect      : logic;
+    var alu_redirect          : logic;
+    var csr_redirect          : logic;
 
     var prediction_redirect: logic;
     var ids_imm            : UIntX;
@@ -129,7 +131,8 @@ module core (
     var rat_write_addr : ArchReg;
     var rat_write_data : PhysReg;
 
-    var rat_flush: logic;
+    var rat_flush        : logic;
+    var branch_checkpoint: logic;
 
     let ids_new_preg: PhysReg = flist_rdata;
     let ids_old_preg: PhysReg = rat_write_old;
@@ -151,7 +154,8 @@ module core (
 
     var csru_priv_mode: PrivMode;
 
-    var prf_busy: logic [PREG_COUNT];
+    var prf_busy           : logic [PREG_COUNT];
+    var prf_busy_checkpoint: logic [PREG_COUNT];
 
     var alu_read1_addr : PhysReg;
     var alu_read1_data : UIntX  ;
@@ -230,9 +234,19 @@ module core (
     always_ff {
         if_reset {
             for i in 0..PREG_COUNT {
-                prf_busy[i] = 0;
+                prf_busy[i]            = 0;
+                prf_busy_checkpoint[i] = 0;
+            }
+        } else if alu_redirect {
+            for i in 0..PREG_COUNT {
+                prf_busy[i] = prf_busy_checkpoint[i];
             }
         } else {
+            if branch_checkpoint {
+                for i in 0..PREG_COUNT {
+                    prf_busy_checkpoint[i] = prf_busy[i];
+                }
+            }
             // 実行完了を先に反映
             if alu_write_valid {
                 prf_busy[alu_write_addr] = 0;
@@ -266,19 +280,25 @@ module core (
 
     // 未解決の直列化命令がROB/MEM内にある
     var serial_pending: logic;
+    var branch_pending: logic;
+
+    let ids_target_ready: logic = switch {
+        ids_is_alu   : alu_wready,
+        ids_is_load  : memu_wready,
+        ids_is_store : memu_wready,
+        ids_is_muldiv: mdu_wready,
+        ids_is_csr   : csru_wready,
+        default      : 1,
+    };
+    let ids_is_control     : logic = ids_is_jalr || inst_is_br(ids_ctrl) || ids_ctrl.is_csr || ids_is_fence_i;
+    let branch_can_dispatch: logic = !inst_is_br(ids_ctrl) || !rob_head_valid;
 
     always_comb {
-        // ID rready: 該当キューが空き + ROB 空き
-        let ids_target_ready: logic = switch {
-            ids_is_alu   : alu_wready,
-            ids_is_load  : memu_wready,
-            ids_is_store : memu_wready,
-            ids_is_muldiv: mdu_wready,
-            ids_is_csr   : csru_wready,
-            default      : 1,
-        };
-        i_membus.rready = !serial_pending && rob_allocate_ready && ids_target_ready && ids_preg_ready;
+        i_membus.rready = !serial_pending && !(branch_pending && ids_is_control) && branch_can_dispatch
+            && rob_allocate_ready && ids_target_ready && ids_preg_ready;
+    }
 
+    always_comb {
         // 該当キューの wvalid / wdata を駆動
         alu_wvalid  = ids_fire && ids_is_alu && alu_wready;
         memu_wvalid = ids_fire && (ids_is_load || ids_is_store) && memu_wready;
@@ -336,10 +356,13 @@ module core (
         rob_allocate_data.bits       = ids_inst_bits;
         rob_allocate_data.ctrl       = ids_ctrl;
         rob_allocate_data.rd_areg    = ids_rd_areg;
+        rob_allocate_data.rd_preg    = ids_new_preg;
         rob_allocate_data.old_preg   = ids_old_preg;
         rob_allocate_data.result     = 0; // complete 時に上書き
         rob_allocate_data.expt       = ids_expt;
         rob_allocate_data.raise_trap = 0;
+
+        branch_checkpoint = ids_fire && inst_is_br(ids_ctrl);
     }
 
     always_comb {
@@ -610,7 +633,7 @@ module core (
         csru_issue = csru_at_head && csru_sources_ready && !csru_active_valid;
         csru_grant = csru_active_valid;
         // ALUは(fence_iでないまたはROB先頭)かつoperand readyなら実行開始・継続
-        alu_grant = alu_rvalid && (!alu_is_fence_i || alu_at_head);
+        alu_grant = alu_rvalid && (!(alu_is_fence_i || alu_is_br) || alu_at_head);
     }
 
     always_comb {
@@ -643,6 +666,7 @@ module core (
         alu_complete_data.bits       = alu_rdata.bits;
         alu_complete_data.ctrl       = alu_rdata.ctrl;
         alu_complete_data.rd_areg    = alu_rdata.bits[11:7];
+        alu_complete_data.rd_preg    = alu_rdata.rd_preg;
         alu_complete_data.old_preg   = alu_rdata.old_preg;
         alu_complete_data.result     = alu_writeback_data;
         alu_complete_data.expt       = alu_rdata.expt;
@@ -652,6 +676,7 @@ module core (
         memu_complete_data.bits       = memu_rdata.bits;
         memu_complete_data.ctrl       = memu_rdata.ctrl;
         memu_complete_data.rd_areg    = memu_rdata.bits[11:7];
+        memu_complete_data.rd_preg    = memu_rdata.rd_preg;
         memu_complete_data.old_preg   = memu_rdata.old_preg;
         memu_complete_data.result     = memu_result;
         memu_complete_data.expt       = memu_rdata.expt;
@@ -661,6 +686,7 @@ module core (
         mdu_complete_data.bits       = mdu_active_entry.bits;
         mdu_complete_data.ctrl       = mdu_active_entry.ctrl;
         mdu_complete_data.rd_areg    = mdu_active_entry.bits[11:7];
+        mdu_complete_data.rd_preg    = mdu_active_entry.rd_preg;
         mdu_complete_data.old_preg   = mdu_active_entry.old_preg;
         mdu_complete_data.result     = mdu_result;
         mdu_complete_data.expt       = mdu_active_entry.expt;
@@ -670,6 +696,7 @@ module core (
         csru_complete_data.bits       = csru_active_entry.bits;
         csru_complete_data.ctrl       = csru_active_entry.ctrl;
         csru_complete_data.rd_areg    = csru_active_entry.bits[11:7];
+        csru_complete_data.rd_preg    = csru_active_entry.rd_preg;
         csru_complete_data.old_preg   = csru_active_entry.old_preg;
         csru_complete_data.result     = csru_result;
         csru_complete_data.expt       = csru_active_entry.expt;
@@ -677,11 +704,11 @@ module core (
     }
 
     always_comb {
-        let alu_redirect: logic = alu_complete && alu_mispredict;
-        let csr_redirect: logic = csru_complete && csru_raise_trap;
+        alu_redirect = alu_complete && alu_mispredict;
+        csr_redirect = csru_complete && csru_raise_trap;
 
         control_hazard   = alu_redirect || csr_redirect;
-        backend_redirect = csr_redirect;
+        backend_redirect = alu_redirect || csr_redirect;
 
         let alu_recovery_pc: Addr = switch {
             alu_is_jalr: alu_jalr_target,
@@ -702,6 +729,15 @@ module core (
             }
         }
     }
+    always_ff {
+        if_reset {
+            branch_pending = 0;
+        } else if alu_complete && alu_is_br {
+            branch_pending = 0;
+        } else if branch_checkpoint {
+            branch_pending = 1;
+        }
+    }
 
     // ROB先頭命令が実際にコミットされた
     let rob_commit_fire: logic = rob_commit_valid && rob_commit_ready && rob_commit_data.ctrl.rwb_en
@@ -719,10 +755,9 @@ module core (
             serial_pending = 0;
         } else if control_hazard {
             serial_pending = 0;
-        } else if alu_complete && (alu_rdata.ctrl.is_jump || inst_is_br(alu_rdata.ctrl) || alu_is_fence_i)
-            || csru_complete {
+        } else if alu_complete && (alu_is_jalr || alu_is_fence_i) || csru_complete {
             serial_pending = 0;
-        } else if ids_fire && (ids_ctrl.is_jump || inst_is_br(ids_ctrl) || ids_ctrl.is_csr || ids_is_fence_i) {
+        } else if ids_fire && (ids_is_jalr || ids_ctrl.is_csr || ids_is_fence_i) {
             serial_pending = 1;
         }
     }
@@ -759,9 +794,25 @@ module core (
                         ids_inst_bits,
                         ids_is_load || ids_is_store,
                     );
+                    if ids_writes_rd {
+                        $display("N\t%0d\tx%0d<-p%0d old=p%0d", trace_cycle, ids_rd_areg, ids_new_preg, ids_old_preg);
+                    }
                 }
                 if alu_complete {
                     $display("K\t%0d\tC\t%0d", trace_cycle, alu_rdata.rob_tag);
+                    if alu_is_br {
+                        $display(
+                            "B\t%0d\t%h\tp%0d=%h\tp%0d=%h\ttake=%b\tpred=%b",
+                            trace_cycle,
+                            alu_rdata.addr,
+                            alu_rdata.rs1_preg,
+                            alu_read1_data,
+                            alu_rdata.rs2_preg,
+                            alu_read2_data,
+                            alu_br_take,
+                            alu_rdata.pred_taken,
+                        );
+                    }
                 }
                 if memu_complete {
                     $display("K\t%0d\tC\t%0d", trace_cycle, memu_rdata.rob_tag);
@@ -916,7 +967,10 @@ module core (
         clk  ,
         rst  ,
         // トラップはROB先頭でのみ受理するため、ここで全破棄できる
-        flush: backend_redirect,
+        flush: csr_redirect,
+
+        partial_flush    : alu_redirect     ,
+        partial_flush_tag: alu_rdata.rob_tag,
 
         allocate_valid: rob_allocate_valid,
         allocate_ready: rob_allocate_ready,
@@ -949,28 +1003,32 @@ module core (
     );
 
     inst flist: free_list (
-        clk                 ,
-        rst                 ,
-        rready: flist_rready,
-        rvalid: flist_rvalid,
-        rdata : flist_rdata ,
-        wready: flist_wready,
-        wvalid: flist_wvalid,
-        wdata : flist_wdata ,
+        clk                          ,
+        rst                          ,
+        checkpoint: branch_checkpoint,
+        restore   : alu_redirect     ,
+        rready    : flist_rready     ,
+        rvalid    : flist_rvalid     ,
+        rdata     : flist_rdata      ,
+        wready    : flist_wready     ,
+        wvalid    : flist_wvalid     ,
+        wdata     : flist_wdata      ,
     );
 
     inst rat: register_alias_table (
-        clk                         ,
-        rst                         ,
-        flush      : rat_flush      ,
-        read1_addr : rat_read1_addr ,
-        read1_data : rat_read1_data ,
-        read2_addr : rat_read2_addr ,
-        read2_data : rat_read2_data ,
-        write_valid: rat_write_valid,
-        write_addr : rat_write_addr ,
-        write_data : rat_write_data ,
-        write_old  : rat_write_old  ,
+        clk                           ,
+        rst                           ,
+        flush      : rat_flush        ,
+        checkpoint : branch_checkpoint,
+        restore    : alu_redirect     ,
+        read1_addr : rat_read1_addr   ,
+        read1_data : rat_read1_data   ,
+        read2_addr : rat_read2_addr   ,
+        read2_data : rat_read2_data   ,
+        write_valid: rat_write_valid  ,
+        write_addr : rat_write_addr   ,
+        write_data : rat_write_data   ,
+        write_old  : rat_write_old    ,
     );
 
     inst prf: physical_register_file (
