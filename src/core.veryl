@@ -524,9 +524,7 @@ module core (
 
     ///////////////////////////////// EX Stage (MEMU) /////////////////////////////////
 
-    let mems_valid    : logic = memu_rvalid;
-    let mems_pc       : Addr  = memu_rdata.addr;
-    let mems_inst_bits: Inst  = memu_rdata.bits;
+    let mems_valid: logic = memu_rvalid;
 
     let mems_at_rob_head: logic = rob_head_valid && rob_head_tag == memu_rdata.rob_tag;
 
@@ -737,7 +735,8 @@ module core (
                 if csru_complete {
                     $display("K\t%0d\tC\t%0d", trace_cycle, csru_rdata.rob_tag);
                 }
-                if rob_commit_fire {
+                // Register writeの有無にかかわらず、すべてのROB commitを記録する
+                if rob_commit_valid && rob_commit_ready {
                     $display(
                         "K\t%0d\tW\t%0d\t%h\t%h",
                         trace_cycle,
@@ -746,12 +745,20 @@ module core (
                         rob_commit_data.bits,
                     );
                 }
-                if control_hazard {
+                if backend_redirect {
                     $display(
-                        "K\t%0d\tR\tMEM\t%h\t%h\t%h",
+                        "K\t%0d\tR\tBACKEND\t%h\t%h\t%h",
                         trace_cycle,
-                        mems_pc,
-                        mems_inst_bits,
+                        csru_rdata.addr,
+                        csru_rdata.bits,
+                        control_hazard_pc_next,
+                    );
+                } else if control_hazard {
+                    $display(
+                        "K\t%0d\tR\tCTRL\t%h\t%h\t%h",
+                        trace_cycle,
+                        alu_rdata.addr,
+                        alu_rdata.bits,
                         control_hazard_pc_next,
                     );
                 } else if prediction_redirect {

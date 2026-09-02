@@ -30,7 +30,7 @@ def main():
     # Module $display order is unspecified.  This is the logical order within
     # one clock edge; redirects are applied after the instruction causing them.
     event_priority = {"Q": 0, "P": 1, "F": 2, "X": 3, "C": 4, "W": 5, "A": 6, "R": 7}
-    raw_events.sort(key=lambda event: (event[0], event_priority[event[2]], event[1]))
+    raw_events.sort(key=lambda event: (event[0], event_priority.get(event[2], 99), event[1]))
 
     instructions = []
     frontend = collections.deque()
@@ -61,7 +61,15 @@ def main():
             request["used"].add(pc)
 
         inst_id = len(instructions)
-        instructions.append({"id": inst_id, "pc": pc, "bits": bits, "killed": False})
+        instructions.append(
+            {
+                "id": inst_id,
+                "pc": pc,
+                "bits": bits,
+                "alive": True,
+                "stage": "F",
+            }
+        )
         emit(
             start_cycle,
             0,
@@ -71,24 +79,45 @@ def main():
         )
         # F covers the memory request through instruction extraction.  Once
         # inserted into the issue FIFO, the instruction waits in D until X.
-        emit(cycle, 1, f"S\t{inst_id}\t0\tD")
+        transition(inst_id, cycle, 1, "D")
         return inst_id
+
+    def transition(inst_id, cycle, priority, stage):
+        """Move an instruction to a stage without emitting duplicate stages."""
+        inst = instructions[inst_id]
+        if not inst["alive"] or inst["stage"] == stage:
+            return
+        inst["stage"] = stage
+        emit(cycle, priority, f"S\t{inst_id}\t0\t{stage}")
 
     def take(queue, pc, bits, event):
         for inst_id in queue:
             inst = instructions[inst_id]
-            if inst["pc"] == pc and inst["bits"] == bits and not inst["killed"]:
+            if inst["pc"] == pc and inst["bits"] == bits and inst["alive"]:
                 queue.remove(inst_id)
                 return inst_id
         print(f"konata.py: unmatched {event} at {pc:016x}: {bits:08x}", file=sys.stderr)
         return new_instruction(current_cycle, pc, bits)
 
+    def finish(inst_id, cycle, flushed):
+        nonlocal retire_id
+        inst = instructions[inst_id]
+        if not inst["alive"]:
+            return
+        inst["alive"] = False
+        emit(cycle, 8, f"R\t{inst_id}\t{retire_id}\t{1 if flushed else 0}")
+        if not flushed:
+            retire_id += 1
+
     def kill(queue, cycle):
         while queue:
             inst_id = queue.popleft()
-            if not instructions[inst_id]["killed"]:
-                instructions[inst_id]["killed"] = True
-                emit(cycle, 8, f"R\t{inst_id}\t{retire_id}\t1")
+            finish(inst_id, cycle, True)
+
+    def kill_rob(cycle):
+        for inst_id in list(rob.values()):
+            finish(inst_id, cycle, True)
+        rob.clear()
 
     for current_cycle, _, kind, fields in raw_events:
         if kind == "Q":
@@ -107,28 +136,40 @@ def main():
             pc, bits = map(number, fields[:2])
             inst_id = take(frontend, pc, bits, "X")
             execute.append(inst_id)
-            emit(current_cycle, 2, f"L\t{inst_id}\t1\titype: {fields[2]}", f"S\t{inst_id}\t0\tX")
+            emit(current_cycle, 2, f"L\t{inst_id}\t1\titype: {fields[2]}")
+            transition(inst_id, current_cycle, 2, "X")
         elif kind == "A":
             tag = int(fields[0])
             pc, bits = map(number, fields[1:3])
             inst_id = take(execute, pc, bits, "allocate")
+            if tag in rob and instructions[rob[tag]]["alive"]:
+                print(f"konata.py: live ROB tag {tag} was reused", file=sys.stderr)
+                finish(rob[tag], current_cycle, True)
             rob[tag] = inst_id
-            emit(current_cycle, 3, f"S\t{inst_id}\t0\t{'M' if int(fields[3], 2) else 'W'}")
+            emit(current_cycle, 3, f"L\t{inst_id}\t1\tROB tag: {tag}")
+            if int(fields[3], 2):
+                transition(inst_id, current_cycle, 3, "M")
         elif kind == "C":
             tag = int(fields[0])
             if tag in rob:
-                emit(current_cycle, 4, f"S\t{rob[tag]}\t0\tW")
+                transition(rob[tag], current_cycle, 4, "W")
+            else:
+                print(f"konata.py: completion for unknown ROB tag {tag}", file=sys.stderr)
         elif kind == "W":
             tag = int(fields[0])
             if tag in rob:
                 inst_id = rob.pop(tag)
-                emit(current_cycle, 5, f"S\t{inst_id}\t0\tW", f"R\t{inst_id}\t{retire_id}\t0")
-                retire_id += 1
+                transition(inst_id, current_cycle, 5, "W")
+                finish(inst_id, current_cycle, False)
+            else:
+                print(f"konata.py: commit for unknown ROB tag {tag}", file=sys.stderr)
         elif kind == "R":
             redirect_kind = fields[0]
             kill(frontend, current_cycle)
             if redirect_kind != "PRED":
                 kill(execute, current_cycle)
+            if redirect_kind == "BACKEND":
+                kill_rob(current_cycle)
             epoch += 1
             outstanding.clear()
 
@@ -136,6 +177,7 @@ def main():
     last_cycle = raw_events[-1][0] if raw_events else 0
     kill(frontend, last_cycle)
     kill(execute, last_cycle)
+    kill_rob(last_cycle)
 
     print("Kanata\t0004")
     print("C=\t0")
