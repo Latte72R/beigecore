@@ -48,16 +48,28 @@ module store_buffer (
         Done,
     }
 
-    var entries     : store_entry_type    [4];
-    var entries_next: store_entry_type    [4];
-    var count       : logic           <3>    ;
-    var count_next  : logic           <3>    ;
-    var keep_count  : logic           <3>    ;
-    var state       : State                  ;
+    var entries            : store_entry_type    [4];
+    var entries_next       : store_entry_type    [4];
+    var count              : logic           <3>    ;
+    var count_next         : logic           <3>    ;
+    var keep_count         : logic           <3>    ;
+    var state              : State                  ;
+    var squash_pending     : logic                  ;
+    var squash_pending_head: RobTag                 ;
+    var squash_pending_tag : RobTag                 ;
 
-    var load_mask         : logic<MEMBUS_DATA_WIDTH / 8>;
-    var load_matched      : logic                       ;
-    var load_forward_match: logic                       ;
+    var load_mask         : logic<MEMBUS_DATA_WIDTH / 8>    ;
+    var load_matched      : logic                           ;
+    var load_forward_match: logic                           ;
+    var load_match        : logic                        [4];
+    var load_full_match   : logic                        [4];
+    var load_data         : UIntX                        [4];
+    var load_lower_match  : logic                           ;
+    var load_upper_match  : logic                           ;
+    var load_lower_full   : logic                           ;
+    var load_upper_full   : logic                           ;
+    var load_lower_data   : UIntX                           ;
+    var load_upper_data   : UIntX                           ;
 
     function generate_wmask (
         funct3: input logic<3>,
@@ -147,6 +159,7 @@ module store_buffer (
     let commit_response: logic = state == State::WaitValid && membus.rvalid;
     let active_younger : logic = state != State::Idle && squash && (entries[0].tag - squash_head)
         >: (squash_tag - squash_head);
+    let commit_complete: logic = commit_response || state == State::Done;
 
     always_comb {
         wready      = count != 4;
@@ -155,25 +168,34 @@ module store_buffer (
         commit_busy = state != State::Idle;
         // メモリ応答を受けてもROB rollback中なら、ROBとの対応を保つため
         // entryをpopせずDone状態で保持する。
-        commit_done = (commit_response || state == State::Done) && !active_younger && commit_allow;
+        // branch_redirect中はcore側のcommit_validも停止しているため、
+        // pop抑止はactive_youngerのROB tag比較ではなくsquashだけを見る。
+        // active_youngerは実行中Storeを止める用途に限定する。
+        commit_done = commit_complete && !squash && commit_allow;
 
-        load_mask          = generate_load_mask(load_funct3, load_addr);
-        load_matched       = 0;
-        load_forward_match = 0;
-        load_forward_data  = 0;
+        load_mask = generate_load_mask(load_funct3, load_addr);
 
-        // entriesは古いStoreから並ぶ。最後に一致したentryを採用することで、
-        // 同一アドレスへのStoreが複数ある場合も最も若いStoreを使う。
+        // 各Storeとのalias判定を先に行う。entriesは古いStoreから並ぶため、
+        // 一致したentryのうち最も大きいindexが最も若いStoreになる。
         for i in 0..4 {
-            if load_check_valid && i <: count && entries[i].addr[XLEN - 1:3] == load_addr[XLEN - 1:3]
-                && (entries[i].wmask & load_mask) != 0 {
-                load_matched       = 1;
-                load_forward_match = (entries[i].wmask & load_mask) == load_mask;
-                if load_forward_match {
-                    load_forward_data = extract_load_data(entries[i].data, load_funct3, load_addr);
-                }
-            }
+            load_match[i]      = load_check_valid && i <: count && entries[i].addr[XLEN - 1:3] == load_addr[XLEN - 1:3]
+                && (entries[i].wmask & load_mask) != 0;
+            load_full_match[i] = load_match[i] && (entries[i].wmask & load_mask) == load_mask;
+            load_data[i]       = extract_load_data(entries[i].data, load_funct3, load_addr);
         }
+
+        // 4 entryの優先選択を2 entryずつに分け、forward dataのmux段数を
+        // 3段から最大2段にする。上位pairを選ぶことで最新Storeを優先する。
+        load_lower_match = load_match[0] || load_match[1];
+        load_upper_match = load_match[2] || load_match[3];
+        load_lower_full  = if load_match[1] ? load_full_match[1] : load_full_match[0];
+        load_upper_full  = if load_match[3] ? load_full_match[3] : load_full_match[2];
+        load_lower_data  = if load_match[1] ? load_data[1] : load_data[0];
+        load_upper_data  = if load_match[3] ? load_data[3] : load_data[2];
+
+        load_matched       = load_lower_match || load_upper_match;
+        load_forward_match = if load_upper_match ? load_upper_full : load_lower_full;
+        load_forward_data  = if load_upper_match ? load_upper_data : load_lower_data;
         load_blocked       = load_matched && !load_forward_match;
         load_forward_valid = load_matched && load_forward_match;
 
@@ -211,9 +233,13 @@ module store_buffer (
         }
 
         // Store Bufferも命令順に並ぶため、分岐より若いsuffixだけを破棄する。
-        if squash {
+        // 分岐通知はrollback開始と同時に受け取るが、配列のsuffix削除は
+        // 登録したタグを次cycleに適用する。これでredirect tagからentriesの
+        // write-enableまでの組合せ経路を切る。
+        if squash_pending {
             for i in 0..4 {
-                if i <: count_next && !((entries_next[i].tag - squash_head) >: (squash_tag - squash_head)) {
+                if i <: count_next
+                    && !((entries_next[i].tag - squash_pending_head) >: (squash_pending_tag - squash_pending_head)) {
                     keep_count += 1;
                 }
             }
@@ -229,18 +255,31 @@ module store_buffer (
     #[allow(missing_reset_statement)]
     always_ff {
         if_reset {
-            state = State::Idle;
-            count = 0;
+            state               = State::Idle;
+            count               = 0;
+            squash_pending      = 0;
+            squash_pending_head = 0;
+            squash_pending_tag  = 0;
             for i in 0..4 {
                 entries[i] = '0;
             }
         } else if flush {
-            state = State::Idle;
-            count = 0;
+            state               = State::Idle;
+            count               = 0;
+            squash_pending      = 0;
+            squash_pending_head = 0;
+            squash_pending_tag  = 0;
             for i in 0..4 {
                 entries[i] = '0;
             }
         } else {
+            if squash {
+                squash_pending      = 1;
+                squash_pending_head = squash_head;
+                squash_pending_tag  = squash_tag;
+            } else if squash_pending {
+                squash_pending = 0;
+            }
             if active_younger {
                 state = State::Idle;
             } else {
