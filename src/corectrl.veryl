@@ -57,4 +57,31 @@ package corectrl {
         return ctrl.itype == InstType::B;
     }
 
+    struct euq_type {
+        addr       : Addr         ,
+        bits       : Inst         ,
+        ctrl       : InstCtrl     ,
+        imm        : UIntX        ,
+        expt       : ExceptionInfo,
+        pred_taken : logic        ,
+        pred_target: Addr         ,
+        rs1_preg   : PhysReg      ,
+        rs2_preg   : PhysReg      ,
+        rd_preg    : PhysReg      ,
+        old_preg   : PhysReg      ,
+        rob_tag    : RobTag       ,
+        uses_rs1   : logic        ,
+        uses_rs2   : logic        ,
+    }
+
+    struct rob_entry_type {
+        addr      : Addr         ,
+        bits      : Inst         ,
+        ctrl      : InstCtrl     ,
+        rd_areg   : ArchReg      ,
+        old_preg  : PhysReg      ,
+        result    : UIntX        ,
+        expt      : ExceptionInfo,
+        raise_trap: logic        ,
+    }
 }

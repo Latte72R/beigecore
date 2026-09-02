@@ -9,65 +9,6 @@ module core (
     led     : output  UIntX               ,
     aclint  : modport aclint_if::slave    ,
 ) {
-    struct exq_type {
-        addr       : Addr         ,
-        bits       : Inst         ,
-        ctrl       : InstCtrl     ,
-        imm        : UIntX        ,
-        expt       : ExceptionInfo,
-        pred_taken : logic        ,
-        pred_target: Addr         ,
-        rs1_preg   : PhysReg      ,
-        rs2_preg   : PhysReg      ,
-        rd_preg    : PhysReg      ,
-        rd_old_preg: PhysReg      ,
-    }
-
-    struct euq_type {
-        addr       : Addr         ,
-        bits       : Inst         ,
-        ctrl       : InstCtrl     ,
-        imm        : UIntX        ,
-        expt       : ExceptionInfo,
-        pred_taken : logic        ,
-        pred_target: Addr         ,
-        rs1_preg   : PhysReg      ,
-        rs2_preg   : PhysReg      ,
-        rd_preg    : PhysReg      ,
-        old_preg   : PhysReg      ,
-        rob_tag    : RobTag       ,
-        uses_rs1   : logic        ,
-        uses_rs2   : logic        ,
-    }
-
-    struct memu_type {
-        rob_tag    : RobTag       ,
-        addr       : Addr         ,
-        bits       : Inst         ,
-        ctrl       : InstCtrl     ,
-        imm        : UIntX        ,
-        expt       : ExceptionInfo,
-        alu_result : UIntX        ,
-        rs1_areg   : ArchReg      ,
-        rs1_data   : UIntX        ,
-        rs2_data   : UIntX        ,
-        br_taken   : logic        ,
-        jump_addr  : Addr         ,
-        pred_taken : logic        ,
-        pred_target: Addr         ,
-    }
-
-    struct rob_entry_type {
-        addr      : Addr         ,
-        bits      : Inst         ,
-        ctrl      : InstCtrl     ,
-        rd_areg   : ArchReg      ,
-        old_preg  : PhysReg      ,
-        result    : UIntX        ,
-        expt      : ExceptionInfo,
-        raise_trap: logic        ,
-    }
-
     // (EX, MEM) -> WB の Reorder Buffer
     var rob_allocate_valid: logic         ;
     var rob_allocate_ready: logic         ;
@@ -250,6 +191,9 @@ module core (
     var alu_grant   : logic   ;
     var alu_complete: logic   ;
 
+    var alu_wrs1ready: logic;
+    var alu_wrs2ready: logic;
+
     var memu_wready  : logic   ;
     var memu_wvalid  : logic   ;
     var memu_rready  : logic   ;
@@ -350,6 +294,18 @@ module core (
         dispatch_data.pred_target = ids_pred_target;
         dispatch_data.uses_rs1    = ids_uses_rs1;
         dispatch_data.uses_rs2    = ids_uses_rs2;
+
+        // issue_queue に今回入れる命令の readyを生成
+        alu_wrs1ready = !dispatch_data.uses_rs1 || !prf_busy[dispatch_data.rs1_preg]
+            || (alu_write_valid && alu_write_addr == dispatch_data.rs1_preg)
+            || (memu_write_valid && memu_write_addr == dispatch_data.rs1_preg)
+            || (mdu_write_valid && mdu_write_addr == dispatch_data.rs1_preg)
+            || (csru_write_valid && csru_write_addr == dispatch_data.rs1_preg);
+        alu_wrs2ready = !dispatch_data.uses_rs2 || !prf_busy[dispatch_data.rs2_preg]
+            || (alu_write_valid && alu_write_addr == dispatch_data.rs2_preg)
+            || (memu_write_valid && memu_write_addr == dispatch_data.rs2_preg)
+            || (mdu_write_valid && mdu_write_addr == dispatch_data.rs2_preg)
+            || (csru_write_valid && csru_write_addr == dispatch_data.rs2_preg);
 
         // dispatch_data を代入
         alu_wdata  = dispatch_data;
@@ -600,8 +556,8 @@ module core (
 
     ///////////////////////////////// EX Stage (Issue / Completion) /////////////////////////////////
 
-    let alu_sources_ready : logic = (!alu_rdata.uses_rs1 || !prf_busy[alu_rdata.rs1_preg])
-        && (!alu_rdata.uses_rs2 || !prf_busy[alu_rdata.rs2_preg]);
+    // let alu_sources_ready : logic = (!alu_rdata.uses_rs1 || !prf_busy[alu_rdata.rs1_preg])
+    //     && (!alu_rdata.uses_rs2 || !prf_busy[alu_rdata.rs2_preg]);
     let csru_sources_ready: logic = (!csru_rdata.uses_rs1 || !prf_busy[csru_rdata.rs1_preg])
         && (!csru_rdata.uses_rs2 || !prf_busy[csru_rdata.rs2_preg]);
     let memu_sources_ready: logic = (!memu_rdata.uses_rs1 || !prf_busy[memu_rdata.rs1_preg])
@@ -617,7 +573,7 @@ module core (
         // CSRはROB先頭かつoperand readyなら実行
         csru_grant = csru_at_head && csru_sources_ready;
         // ALUは(fence_iでないまたはROB先頭)かつoperand readyなら実行開始・継続
-        alu_grant = alu_rvalid && alu_sources_ready && (!alu_is_fence_i || alu_at_head);
+        alu_grant = alu_rvalid && (!alu_is_fence_i || alu_at_head);
     }
 
     always_comb {
@@ -834,19 +790,31 @@ module core (
 
     ///////////////////////////////// FIFO /////////////////////////////////
 
-    inst aluq: fifo #(
-        DATA_TYPE: euq_type,
-        WIDTH    : 3       ,
+    inst aluq: issue_queue #(
+        SIZE: 8,
     ) (
-        clk                     ,
-        rst                     ,
-        flush : backend_redirect,
-        wready: alu_wready      ,
-        wvalid: alu_wvalid      ,
-        wdata : alu_wdata       ,
-        rready: alu_rready      ,
-        rvalid: alu_rvalid      ,
-        rdata : alu_rdata       ,
+        clk                    ,
+        rst                    ,
+        flush: backend_redirect,
+
+        wvalid   : alu_wvalid   ,
+        wready   : alu_wready   ,
+        wdata    : alu_wdata    ,
+        wrs1ready: alu_wrs1ready,
+        wrs2ready: alu_wrs2ready,
+
+        wakeup0_valid: alu_write_valid ,
+        wakeup0_preg : alu_write_addr  ,
+        wakeup1_valid: memu_write_valid,
+        wakeup1_preg : memu_write_addr ,
+        wakeup2_valid: mdu_write_valid ,
+        wakeup2_preg : mdu_write_addr  ,
+        wakeup3_valid: csru_write_valid,
+        wakeup3_preg : csru_write_addr ,
+
+        rvalid: alu_rvalid,
+        rready: alu_rready,
+        rdata : alu_rdata ,
     );
 
     inst memq: fifo #(

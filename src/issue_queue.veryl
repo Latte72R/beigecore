@@ -1,0 +1,127 @@
+import eei::*;
+import corectrl::*;
+
+module issue_queue #(
+    param SIZE: u32 = 8,
+) (
+    clk  : input clock,
+    rst  : input reset,
+    flush: input logic,
+
+    // dispatch
+    wvalid   : input  logic   ,
+    wready   : output logic   ,
+    wdata    : input  euq_type,
+    wrs1ready: input  logic   ,
+    wrs2ready: input  logic   ,
+
+    // registered wakeup
+    wakeup0_valid: input logic  ,
+    wakeup0_preg : input PhysReg,
+    wakeup1_valid: input logic  ,
+    wakeup1_preg : input PhysReg,
+    wakeup2_valid: input logic  ,
+    wakeup2_preg : input PhysReg,
+    wakeup3_valid: input logic  ,
+    wakeup3_preg : input PhysReg,
+
+    // issue
+    rvalid: output logic   ,
+    rready: input  logic   ,
+    rdata : output euq_type,
+) {
+    // entry[0]が最古，entry[count - 1]が最新
+    // 任意entryをissueした後は後続entryを前へ詰める
+    struct issue_entry_type {
+        data     : euq_type,
+        rs1_ready: logic   ,
+        rs2_ready: logic   ,
+    }
+
+    var entries     : issue_entry_type    [SIZE];
+    var entries_next: issue_entry_type    [SIZE];
+    var count       : logic           <4>       ;
+    var count_next  : logic           <4>       ;
+
+    var selected_valid: logic   ;
+    var selected_index: logic<3>;
+
+    // readyなentryのうち最も古いものを選択する
+    always_comb {
+        selected_valid = 0;
+        selected_index = 0;
+
+        for i in 0..SIZE {
+            if !selected_valid && i <: count && entries[i].rs1_ready && entries[i].rs2_ready {
+                selected_valid = 1;
+                selected_index = i as 3;
+            }
+        }
+
+        rvalid = selected_valid;
+        rdata  = entries[selected_index].data;
+    }
+
+    assign wready = count != (SIZE as 4) || (rvalid && rready);
+
+    // 次状態の更新順序:
+    //   1. writeback tagによるwakeup
+    //   2. issue済みentryの削除とcompact
+    //   3. dispatchされたentryを末尾へ追加
+    always_comb {
+        count_next   = count;
+        entries_next = entries;
+
+        for i in 0..SIZE {
+            if (wakeup0_valid && entries[i].data.rs1_preg == wakeup0_preg)
+                || (wakeup1_valid && entries[i].data.rs1_preg == wakeup1_preg)
+                || (wakeup2_valid && entries[i].data.rs1_preg == wakeup2_preg)
+                || (wakeup3_valid && entries[i].data.rs1_preg == wakeup3_preg) {
+                entries_next[i].rs1_ready = 1;
+            }
+
+            if (wakeup0_valid && entries[i].data.rs2_preg == wakeup0_preg)
+                || (wakeup1_valid && entries[i].data.rs2_preg == wakeup1_preg)
+                || (wakeup2_valid && entries[i].data.rs2_preg == wakeup2_preg)
+                || (wakeup3_valid && entries[i].data.rs2_preg == wakeup3_preg) {
+                entries_next[i].rs2_ready = 1;
+            }
+        }
+
+        // issueされたentryを削除し後続entryを1つ前へ詰める
+        if rvalid && rready {
+            for i in 0..(SIZE - 1) {
+                if i >= selected_index {
+                    entries_next[i] = entries_next[i + 1];
+                }
+            }
+            entries_next[SIZE - 1] =  '0;
+            count_next             -= 1;
+        }
+
+        // 新しい末尾indexに書き込み
+        let write_index: logic<3> = count_next[2:0];
+        if wvalid && wready {
+            entries_next[write_index].data      =  wdata;
+            entries_next[write_index].rs1_ready =  wrs1ready;
+            entries_next[write_index].rs2_ready =  wrs2ready;
+            count_next                          += 1;
+        }
+    }
+
+    // Queue state update.
+    // flush時はcountだけを0にすれば全entryが無効になる
+    always_ff {
+        if_reset {
+            count = 0;
+            for i in 0..SIZE {
+                entries[i] = '0;
+            }
+        } else if flush {
+            count = 0;
+        } else {
+            entries = entries_next;
+            count   = count_next;
+        }
+    }
+}
