@@ -9,6 +9,9 @@ module core (
     led     : output  UIntX               ,
     aclint  : modport aclint_if::slave    ,
 ) {
+    inst memu_bus    : core_data_if;
+    inst storebuf_bus: core_data_if;
+
     // (EX, MEM) -> WB の Reorder Buffer
     var rob_allocate_valid: logic         ;
     var rob_allocate_ready: logic         ;
@@ -213,6 +216,29 @@ module core (
     var memu_grant   : logic   ;
     var memu_complete: logic   ;
 
+    var memu_start           : logic   ;
+    var memu_kill            : logic   ;
+    var memu_drop_done       : logic   ;
+    var memu_active_valid    : logic   ;
+    var memu_killed          : logic   ;
+    var memu_active_entry    : euq_type;
+    var memu_exec_entry      : euq_type;
+    var memu_wrs1ready       : logic   ;
+    var memu_wrs2ready       : logic   ;
+    var memu_load_addr       : Addr    ;
+    var memu_load_blocked    : logic   ;
+    var memu_forward_valid   : logic   ;
+    var memu_forward_data    : UIntX   ;
+    var memu_forward_complete: logic   ;
+
+    var storebuf_wready      : logic ;
+    var storebuf_wvalid      : logic ;
+    var storebuf_commit_valid: logic ;
+    var storebuf_commit_done : logic ;
+    var storebuf_commit_busy : logic ;
+    var storebuf_head_valid  : logic ;
+    var storebuf_head_tag    : RobTag;
+
     var mdu_wready  : logic   ;
     var mdu_wvalid  : logic   ;
     var mdu_rready  : logic   ;
@@ -320,22 +346,32 @@ module core (
         dispatch_data.uses_rs2    = ids_uses_rs2;
 
         // issue_queue に今回入れる命令の readyを生成
-        alu_wrs1ready = !dispatch_data.uses_rs1 || !prf_busy[dispatch_data.rs1_preg]
+        alu_wrs1ready  = !dispatch_data.uses_rs1 || !prf_busy[dispatch_data.rs1_preg]
             || (alu_write_valid && alu_write_addr == dispatch_data.rs1_preg)
             || (memu_write_valid && memu_write_addr == dispatch_data.rs1_preg)
             || (mdu_write_valid && mdu_write_addr == dispatch_data.rs1_preg)
             || (csru_write_valid && csru_write_addr == dispatch_data.rs1_preg);
-        alu_wrs2ready = !dispatch_data.uses_rs2 || !prf_busy[dispatch_data.rs2_preg]
+        alu_wrs2ready  = !dispatch_data.uses_rs2 || !prf_busy[dispatch_data.rs2_preg]
             || (alu_write_valid && alu_write_addr == dispatch_data.rs2_preg)
             || (memu_write_valid && memu_write_addr == dispatch_data.rs2_preg)
             || (mdu_write_valid && mdu_write_addr == dispatch_data.rs2_preg)
             || (csru_write_valid && csru_write_addr == dispatch_data.rs2_preg);
-        mdu_wrs1ready = !dispatch_data.uses_rs1 || !prf_busy[dispatch_data.rs1_preg]
+        mdu_wrs1ready  = !dispatch_data.uses_rs1 || !prf_busy[dispatch_data.rs1_preg]
             || (alu_write_valid && alu_write_addr == dispatch_data.rs1_preg)
             || (memu_write_valid && memu_write_addr == dispatch_data.rs1_preg)
             || (mdu_write_valid && mdu_write_addr == dispatch_data.rs1_preg)
             || (csru_write_valid && csru_write_addr == dispatch_data.rs1_preg);
-        mdu_wrs2ready = !dispatch_data.uses_rs2 || !prf_busy[dispatch_data.rs2_preg]
+        mdu_wrs2ready  = !dispatch_data.uses_rs2 || !prf_busy[dispatch_data.rs2_preg]
+            || (alu_write_valid && alu_write_addr == dispatch_data.rs2_preg)
+            || (memu_write_valid && memu_write_addr == dispatch_data.rs2_preg)
+            || (mdu_write_valid && mdu_write_addr == dispatch_data.rs2_preg)
+            || (csru_write_valid && csru_write_addr == dispatch_data.rs2_preg);
+        memu_wrs1ready = !dispatch_data.uses_rs1 || !prf_busy[dispatch_data.rs1_preg]
+            || (alu_write_valid && alu_write_addr == dispatch_data.rs1_preg)
+            || (memu_write_valid && memu_write_addr == dispatch_data.rs1_preg)
+            || (mdu_write_valid && mdu_write_addr == dispatch_data.rs1_preg)
+            || (csru_write_valid && csru_write_addr == dispatch_data.rs1_preg);
+        memu_wrs2ready = !dispatch_data.uses_rs2 || !prf_busy[dispatch_data.rs2_preg]
             || (alu_write_valid && alu_write_addr == dispatch_data.rs2_preg)
             || (memu_write_valid && memu_write_addr == dispatch_data.rs2_preg)
             || (mdu_write_valid && mdu_write_addr == dispatch_data.rs2_preg)
@@ -389,8 +425,8 @@ module core (
     always_comb {
         alu_read1_addr  = alu_rdata.rs1_preg;
         alu_read2_addr  = alu_rdata.rs2_preg;
-        memu_read1_addr = memu_rdata.rs1_preg;
-        memu_read2_addr = memu_rdata.rs2_preg;
+        memu_read1_addr = memu_exec_entry.rs1_preg;
+        memu_read2_addr = memu_exec_entry.rs2_preg;
         mdu_read1_addr  = mdu_rdata.rs1_preg;
         mdu_read2_addr  = mdu_rdata.rs2_preg;
         csru_read_addr  = csru_active_entry.rs1_preg;
@@ -526,44 +562,86 @@ module core (
 
     ///////////////////////////////// EX Stage (MEMU) /////////////////////////////////
 
-    let mems_valid    : logic = memu_rvalid;
-    let mems_pc       : Addr  = memu_rdata.addr;
-    let mems_inst_bits: Inst  = memu_rdata.bits;
-
-    let mems_at_rob_head: logic = rob_head_valid && rob_head_tag == memu_rdata.rob_tag;
+    let mems_pc       : Addr = memu_rdata.addr;
+    let mems_inst_bits: Inst = memu_rdata.bits;
 
     var memu_result: UIntX;
     var memu_stall : logic;
 
+    always_comb {
+        memu_exec_entry = if memu_active_valid ? memu_active_entry : memu_rdata;
+        memu_load_addr  = memu_read1_data + memu_rdata.imm;
+    }
+
     inst memu: memunit (
-        clk   : clk                             ,
-        rst   : rst                             ,
-        valid : memu_grant                      ,
-        ctrl  : memu_rdata.ctrl                 ,
-        addr  : memu_read1_data + memu_rdata.imm,
-        rs2   : memu_read2_data                 ,
-        rdata : memu_result                     ,
-        stall : memu_stall                      ,
-        membus: d_membus                        ,
+        clk   : clk                                  ,
+        rst   : rst                                  ,
+        valid : memu_grant                           ,
+        ctrl  : memu_exec_entry.ctrl                 ,
+        addr  : memu_read1_data + memu_exec_entry.imm,
+        rs2   : memu_read2_data                      ,
+        rdata : memu_result                          ,
+        stall : memu_stall                           ,
+        membus: memu_bus                             ,
     );
-
-    var minstret: UInt64;
-
-    // ROB先頭命令の最初のサイクルでだけ受け付ける
-    var mems_intr_checked: logic;
 
     always_ff {
         if_reset {
-            mems_intr_checked = 0;
-        } else if !mems_valid || memu_rready {
-            // 空または現在の命令をMEMから取り出した
-            mems_intr_checked = 0;
-        } else if mems_at_rob_head {
-            mems_intr_checked = 1;
+            memu_active_valid = 0;
+            memu_killed       = 0;
+            memu_active_entry = '0;
+        } else {
+            if memu_start && !memu_forward_valid {
+                memu_active_valid = 1;
+                memu_killed       = 0;
+                memu_active_entry = memu_rdata;
+            }
+            if memu_kill {
+                memu_killed = 1;
+            }
+            if memu_complete || memu_drop_done {
+                memu_active_valid = 0;
+                memu_killed       = 0;
+            }
         }
     }
 
-    let memu_at_head: logic = memu_rvalid && rob_head_valid && rob_head_tag == memu_rdata.rob_tag;
+    // Load用MEMUと、ROB headで実行するStore Bufferを1本のバスへ接続する。
+    let storebus_selected: logic = storebuf_commit_busy;
+    always_comb {
+        if storebus_selected {
+            d_membus.valid  = storebuf_bus.valid;
+            d_membus.addr   = storebuf_bus.addr;
+            d_membus.wen    = storebuf_bus.wen;
+            d_membus.wdata  = storebuf_bus.wdata;
+            d_membus.wmask  = storebuf_bus.wmask;
+            d_membus.is_amo = storebuf_bus.is_amo;
+            d_membus.aq     = storebuf_bus.aq;
+            d_membus.rl     = storebuf_bus.rl;
+            d_membus.amoop  = storebuf_bus.amoop;
+            d_membus.funct3 = storebuf_bus.funct3;
+        } else {
+            d_membus.valid  = memu_bus.valid;
+            d_membus.addr   = memu_bus.addr;
+            d_membus.wen    = memu_bus.wen;
+            d_membus.wdata  = memu_bus.wdata;
+            d_membus.wmask  = memu_bus.wmask;
+            d_membus.is_amo = memu_bus.is_amo;
+            d_membus.aq     = memu_bus.aq;
+            d_membus.rl     = memu_bus.rl;
+            d_membus.amoop  = memu_bus.amoop;
+            d_membus.funct3 = memu_bus.funct3;
+        }
+
+        memu_bus.ready      = d_membus.ready && !storebus_selected;
+        memu_bus.rvalid     = d_membus.rvalid && !storebus_selected;
+        memu_bus.rdata      = d_membus.rdata;
+        storebuf_bus.ready  = d_membus.ready && storebus_selected;
+        storebuf_bus.rvalid = d_membus.rvalid && storebus_selected;
+        storebuf_bus.rdata  = d_membus.rdata;
+    }
+
+    var minstret: UInt64;
 
     ///////////////////////////////// EX Stage (CSRU) /////////////////////////////////
 
@@ -623,8 +701,17 @@ module core (
         && (!memu_rdata.uses_rs2 || !prf_busy[memu_rdata.rs2_preg]);
 
     always_comb {
-        // MEMはROB先頭かつoperand readyなら実行開始・継続
-        memu_grant = memu_at_head && memu_sources_ready;
+        // LoadはStoreより前にある範囲で、最古のready命令を実行する。
+        memu_start = memu_rvalid && memu_rdata.ctrl.is_load
+            && memu_sources_ready
+            // older Storeと重複する場合だけ待ち、非重複Storeは追い越す。
+             && !memu_load_blocked && !memu_active_valid && !storebuf_commit_busy && !branch_redirect && !csr_redirect;
+        // 完全にStore Bufferから転送できるLoadはmemunitを起動しない。
+        memu_grant     = memu_active_valid || (memu_start && !memu_forward_valid);
+        memu_kill      = csr_redirect
+            || (branch_redirect && memu_active_valid && (memu_active_entry.rob_tag - rob_head_tag)
+                >: (alu_rdata.rob_tag - rob_head_tag));
+        memu_drop_done = memu_active_valid && memu_killed && !memu_stall;
         // MDUはMDUがidleなら実行開始・継続
         // 分岐回復と同じcycleに発行すると、queueから消えたyoung命令が
         // MDUへ入ってしまうため、回復完了後のcycleで再発行する。
@@ -640,22 +727,29 @@ module core (
     }
 
     always_comb {
-        alu_complete  = alu_grant;
-        mdu_complete  = mdu_busy && mdu_result_valid && !mdu_kill;
-        memu_complete = memu_grant && !memu_stall;
-        csru_complete = csru_grant;
+        alu_complete          = alu_grant;
+        mdu_complete          = mdu_busy && mdu_result_valid && !mdu_kill;
+        memu_forward_complete = memu_start && memu_forward_valid;
+        memu_complete         = (memu_active_valid && !memu_killed && !memu_stall) || memu_forward_complete
+            || storebuf_wvalid;
+        csru_complete         = csru_grant;
     }
 
     always_comb {
         // MEM -> WB
-        alu_rready  = alu_grant;
-        mdu_rready  = mdu_grant;
-        memu_rready = memu_complete;
+        alu_rready = alu_grant;
+        mdu_rready = mdu_grant;
+        // killedなLoadも、応答を受け取ったらmemory queueから取り除く。
+        // ただしmemu_completeには含めず、ROB/PRFへは反映しない。
+        memu_rready = memu_complete || memu_drop_done;
         csru_rready = csru_issue;
 
-        memu_write_valid = memu_complete && memu_rdata.ctrl.is_load && memu_rdata.bits[11:7] != 0;
-        memu_write_addr  = memu_rdata.rd_preg;
-        memu_write_data  = memu_result;
+        storebuf_wvalid = memu_rvalid && inst_is_store(memu_rdata.ctrl) && memu_sources_ready && storebuf_wready
+            && !memu_active_valid && !branch_redirect && !csr_redirect;
+
+        memu_write_valid = memu_complete && memu_exec_entry.ctrl.is_load && memu_exec_entry.bits[11:7] != 0;
+        memu_write_addr  = memu_exec_entry.rd_preg;
+        memu_write_data  = if memu_forward_complete ? memu_forward_data : memu_result;
 
         csru_write_valid = csru_complete && csru_active_entry.ctrl.rwb_en && csru_active_entry.bits[11:7] != 0;
         csru_write_addr  = csru_active_entry.rd_preg;
@@ -675,14 +769,14 @@ module core (
         alu_complete_data.expt       = alu_rdata.expt;
         alu_complete_data.raise_trap = 0;
 
-        memu_complete_data.addr       = memu_rdata.addr;
-        memu_complete_data.bits       = memu_rdata.bits;
-        memu_complete_data.ctrl       = memu_rdata.ctrl;
-        memu_complete_data.rd_areg    = memu_rdata.bits[11:7];
-        memu_complete_data.rd_preg    = memu_rdata.rd_preg;
-        memu_complete_data.old_preg   = memu_rdata.old_preg;
-        memu_complete_data.result     = memu_result;
-        memu_complete_data.expt       = memu_rdata.expt;
+        memu_complete_data.addr       = memu_exec_entry.addr;
+        memu_complete_data.bits       = memu_exec_entry.bits;
+        memu_complete_data.ctrl       = memu_exec_entry.ctrl;
+        memu_complete_data.rd_areg    = memu_exec_entry.bits[11:7];
+        memu_complete_data.rd_preg    = memu_exec_entry.rd_preg;
+        memu_complete_data.old_preg   = memu_exec_entry.old_preg;
+        memu_complete_data.result     = memu_write_data;
+        memu_complete_data.expt       = memu_exec_entry.expt;
         memu_complete_data.raise_trap = 0;
 
         mdu_complete_data.addr       = mdu_active_entry.addr;
@@ -770,10 +864,15 @@ module core (
 
     always_comb {
         // WB -> END
-        rob_commit_ready   = !rob_rollback_busy;
+        rob_commit_ready   = !rob_rollback_busy
+            && (!rob_commit_valid || !inst_is_store(rob_commit_data.ctrl) || storebuf_commit_done);
         rob_rollback_ready = !rob_rollback_data.ctrl.rwb_en || rob_rollback_data.rd_areg == 0 || flist_wready;
         rollback_fire      = rob_rollback_valid && rob_rollback_ready;
         rollback_reg_fire  = rollback_fire && rob_rollback_data.ctrl.rwb_en && rob_rollback_data.rd_areg != 0;
+
+        storebuf_commit_valid = rob_commit_valid && inst_is_store(rob_commit_data.ctrl) && storebuf_head_valid
+            && storebuf_head_tag == rob_head_tag && !storebuf_commit_busy && !rob_rollback_busy && !memu_grant
+            && !branch_redirect && !csr_redirect;
 
         flist_wvalid = rollback_reg_fire || rob_commit_fire;
         flist_wdata  = if rollback_reg_fire ? rob_rollback_data.rd_preg : rob_commit_data.old_preg;
@@ -928,9 +1027,57 @@ module core (
         wready: memu_wready,
         wvalid: memu_wvalid,
         wdata : memu_wdata ,
+
+        wrs1ready: memu_wrs1ready,
+        wrs2ready: memu_wrs2ready,
+
+        wakeup0_valid: alu_write_valid ,
+        wakeup0_preg : alu_write_addr  ,
+        wakeup1_valid: memu_write_valid,
+        wakeup1_preg : memu_write_addr ,
+        wakeup2_valid: mdu_write_valid ,
+        wakeup2_preg : mdu_write_addr  ,
+        wakeup3_valid: csru_write_valid,
+        wakeup3_preg : csru_write_addr ,
+
+        lock_valid: memu_active_valid        ,
+        lock_tag  : memu_active_entry.rob_tag,
+
         rready: memu_rready,
         rvalid: memu_rvalid,
         rdata : memu_rdata ,
+    );
+
+    inst storebuf: store_buffer (
+        clk                ,
+        rst                ,
+        flush: csr_redirect,
+
+        squash     : branch_redirect  ,
+        squash_head: rob_head_tag     ,
+        squash_tag : alu_rdata.rob_tag,
+
+        wvalid  : storebuf_wvalid,
+        wready  : storebuf_wready,
+        wdata   : memu_rdata     ,
+        rs1_data: memu_read1_data,
+        rs2_data: memu_read2_data,
+
+        load_check_valid  : memu_rvalid && memu_rdata.ctrl.is_load && memu_sources_ready && !memu_active_valid,
+        load_addr         : memu_load_addr                                                                    ,
+        load_funct3       : memu_rdata.ctrl.funct3                                                            ,
+        load_blocked      : memu_load_blocked                                                                 ,
+        load_forward_valid: memu_forward_valid                                                                ,
+        load_forward_data : memu_forward_data                                                                 ,
+
+        commit_valid: storebuf_commit_valid,
+        commit_allow: !rob_rollback_busy   ,
+        commit_done : storebuf_commit_done ,
+        commit_busy : storebuf_commit_busy ,
+        head_valid  : storebuf_head_valid  ,
+        head_tag    : storebuf_head_tag    ,
+
+        membus: storebuf_bus,
     );
 
     inst muldivq: issue_queue (
@@ -1004,9 +1151,9 @@ module core (
         complete0_tag  : alu_rdata.rob_tag,
         complete0_data : alu_complete_data,
 
-        complete1_valid: memu_complete     ,
-        complete1_tag  : memu_rdata.rob_tag,
-        complete1_data : memu_complete_data,
+        complete1_valid: memu_complete          ,
+        complete1_tag  : memu_exec_entry.rob_tag,
+        complete1_data : memu_complete_data     ,
 
         complete2_valid: mdu_complete            ,
         complete2_tag  : mdu_active_entry.rob_tag,

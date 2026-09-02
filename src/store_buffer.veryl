@@ -1,0 +1,267 @@
+import eei::*;
+import corectrl::*;
+
+// Storeを実行段でメモリへ書き込まず、アドレスとデータを保持する。
+// 実際の書き込みは対応するStoreがROB headになった時だけ行う。
+module store_buffer (
+    clk  : input clock,
+    rst  : input reset,
+    flush: input logic,
+
+    squash     : input logic ,
+    squash_head: input RobTag,
+    squash_tag : input RobTag,
+
+    wvalid  : input  logic   ,
+    wready  : output logic   ,
+    wdata   : input  euq_type,
+    rs1_data: input  UIntX   ,
+    rs2_data: input  UIntX   ,
+
+    load_check_valid  : input  logic   ,
+    load_addr         : input  Addr    ,
+    load_funct3       : input  logic<3>,
+    load_blocked      : output logic   ,
+    load_forward_valid: output logic   ,
+    load_forward_data : output UIntX   ,
+
+    commit_valid: input  logic ,
+    commit_allow: input  logic ,
+    commit_done : output logic ,
+    commit_busy : output logic ,
+    head_valid  : output logic ,
+    head_tag    : output RobTag,
+
+    membus: modport core_data_if::master,
+) {
+    struct store_entry_type {
+        addr : Addr                         ,
+        data : UIntX                        ,
+        wmask: logic <MEMBUS_DATA_WIDTH / 8>,
+        tag  : RobTag                       ,
+    }
+
+    enum State {
+        Idle,
+        WaitReady,
+        WaitValid,
+        Done,
+    }
+
+    var entries     : store_entry_type    [4];
+    var entries_next: store_entry_type    [4];
+    var count       : logic           <3>    ;
+    var count_next  : logic           <3>    ;
+    var keep_count  : logic           <3>    ;
+    var state       : State                  ;
+
+    var load_mask         : logic<MEMBUS_DATA_WIDTH / 8>;
+    var load_matched      : logic                       ;
+    var load_forward_match: logic                       ;
+
+    function generate_wmask (
+        funct3: input logic<3>,
+        addr  : input Addr    ,
+    ) -> logic<MEMBUS_DATA_WIDTH / 8> {
+        return case funct3[1:0] {
+            2'b00: 8'b1 << addr[2:0],
+            2'b01: case addr[2:0] {
+                6      : 8'b11000000,
+                4      : 8'b00110000,
+                2      : 8'b00001100,
+                0      : 8'b00000011,
+                default: 'x,
+            },
+            2'b10: case addr[2:0] {
+                0      : 8'b00001111,
+                4      : 8'b11110000,
+                default: 'x,
+            },
+            2'b11  : 8'b11111111,
+            default: 'x,
+        };
+    }
+
+    function generate_load_mask (
+        funct3: input logic<3>,
+        addr  : input Addr    ,
+    ) -> logic<MEMBUS_DATA_WIDTH / 8> {
+        return case funct3[1:0] {
+            2'b00: 8'b1 << addr[2:0],
+            2'b01: case addr[2:0] {
+                6      : 8'b11000000,
+                4      : 8'b00110000,
+                2      : 8'b00001100,
+                0      : 8'b00000011,
+                default: 'x,
+            },
+            2'b10: case addr[2:0] {
+                0      : 8'b00001111,
+                4      : 8'b11110000,
+                default: 'x,
+            },
+            2'b11  : 8'b11111111,
+            default: 'x,
+        };
+    }
+
+    function extract_load_data (
+        data  : input UIntX   ,
+        funct3: input logic<3>,
+        addr  : input Addr    ,
+    ) -> UIntX {
+        let sext: logic = funct3[2] == 1'b0;
+        return case funct3[1:0] {
+            2'b00: case addr[2:0] {
+                0      : {sext & data[7] repeat XLEN - 8, data[7:0]},
+                1      : {sext & data[15] repeat XLEN - 8, data[15:8]},
+                2      : {sext & data[23] repeat XLEN - 8, data[23:16]},
+                3      : {sext & data[31] repeat XLEN - 8, data[31:24]},
+                4      : {sext & data[39] repeat XLEN - 8, data[39:32]},
+                5      : {sext & data[47] repeat XLEN - 8, data[47:40]},
+                6      : {sext & data[55] repeat XLEN - 8, data[55:48]},
+                7      : {sext & data[63] repeat XLEN - 8, data[63:56]},
+                default: 'x,
+            },
+            2'b01: case addr[2:0] {
+                0      : {sext & data[15] repeat XLEN - 16, data[15:0]},
+                2      : {sext & data[31] repeat XLEN - 16, data[31:16]},
+                4      : {sext & data[47] repeat XLEN - 16, data[47:32]},
+                6      : {sext & data[63] repeat XLEN - 16, data[63:48]},
+                default: 'x,
+            },
+            2'b10: case addr[2:0] {
+                0      : {sext & data[31] repeat XLEN - 32, data[31:0]},
+                4      : {sext & data[63] repeat XLEN - 32, data[63:32]},
+                default: 'x,
+            },
+            2'b11  : data,
+            default: 'x,
+        };
+    }
+
+    let write_addr: Addr                         = rs1_data + wdata.imm;
+    let write_data: UIntX                        = rs2_data << {write_addr[2:0], 3'b0};
+    let write_mask: logic<MEMBUS_DATA_WIDTH / 8> = generate_wmask(wdata.ctrl.funct3, write_addr);
+
+    let commit_response: logic = state == State::WaitValid && membus.rvalid;
+    let active_younger : logic = state != State::Idle && squash && (entries[0].tag - squash_head)
+        >: (squash_tag - squash_head);
+
+    always_comb {
+        wready      = count != 4;
+        head_valid  = count != 0;
+        head_tag    = entries[0].tag;
+        commit_busy = state != State::Idle;
+        // メモリ応答を受けてもROB rollback中なら、ROBとの対応を保つため
+        // entryをpopせずDone状態で保持する。
+        commit_done = (commit_response || state == State::Done) && !active_younger && commit_allow;
+
+        load_mask          = generate_load_mask(load_funct3, load_addr);
+        load_matched       = 0;
+        load_forward_match = 0;
+        load_forward_data  = 0;
+
+        // entriesは古いStoreから並ぶ。最後に一致したentryを採用することで、
+        // 同一アドレスへのStoreが複数ある場合も最も若いStoreを使う。
+        for i in 0..4 {
+            if load_check_valid && i <: count && entries[i].addr[XLEN - 1:3] == load_addr[XLEN - 1:3]
+                && (entries[i].wmask & load_mask) != 0 {
+                load_matched       = 1;
+                load_forward_match = (entries[i].wmask & load_mask) == load_mask;
+                if load_forward_match {
+                    load_forward_data = extract_load_data(entries[i].data, load_funct3, load_addr);
+                }
+            }
+        }
+        load_blocked       = load_matched && !load_forward_match;
+        load_forward_valid = load_matched && load_forward_match;
+
+        membus.valid  = state == State::WaitReady;
+        membus.addr   = entries[0].addr;
+        membus.wen    = 1;
+        membus.wdata  = entries[0].data;
+        membus.wmask  = entries[0].wmask;
+        membus.is_amo = 0;
+        membus.aq     = 0;
+        membus.rl     = 0;
+        membus.amoop  = 0 as AMOOp;
+        membus.funct3 = 0;
+    }
+
+    always_comb {
+        entries_next = entries;
+        count_next   = count;
+        keep_count   = 0;
+
+        if commit_done {
+            for i in 0..3 {
+                entries_next[i] = entries_next[i + 1];
+            }
+            entries_next[3] =  '0;
+            count_next      -= 1;
+        }
+
+        if wvalid && wready {
+            entries_next[count_next[1:0]].addr  =  write_addr;
+            entries_next[count_next[1:0]].data  =  write_data;
+            entries_next[count_next[1:0]].wmask =  write_mask;
+            entries_next[count_next[1:0]].tag   =  wdata.rob_tag;
+            count_next                          += 1;
+        }
+
+        // Store Bufferも命令順に並ぶため、分岐より若いsuffixだけを破棄する。
+        if squash {
+            for i in 0..4 {
+                if i <: count_next && !((entries_next[i].tag - squash_head) >: (squash_tag - squash_head)) {
+                    keep_count += 1;
+                }
+            }
+            for i in 0..4 {
+                if i >: keep_count {
+                    entries_next[i] = '0;
+                }
+            }
+            count_next = keep_count;
+        }
+    }
+
+    #[allow(missing_reset_statement)]
+    always_ff {
+        if_reset {
+            state = State::Idle;
+            count = 0;
+            for i in 0..4 {
+                entries[i] = '0;
+            }
+        } else if flush {
+            state = State::Idle;
+            count = 0;
+            for i in 0..4 {
+                entries[i] = '0;
+            }
+        } else {
+            if active_younger {
+                state = State::Idle;
+            } else {
+                case state {
+                    State::Idle     : if commit_valid {
+                        state = State::WaitReady;
+                    }
+                    State::WaitReady: if membus.ready {
+                        state = State::WaitValid;
+                    }
+                    State::WaitValid: if membus.rvalid {
+                        state = if commit_done ? State::Idle : State::Done;
+                    }
+                    State::Done     : if commit_done {
+                        state = State::Idle;
+                    }
+                    default         : {}
+                }
+            }
+            entries = entries_next;
+            count   = count_next;
+        }
+    }
+}

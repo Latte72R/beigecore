@@ -12,23 +12,66 @@ module memory_queue (
     squash_head: input RobTag,
     squash_tag : input RobTag,
 
-    wready: output logic   ,
-    wvalid: input  logic   ,
-    wdata : input  euq_type,
+    wready   : output logic   ,
+    wvalid   : input  logic   ,
+    wdata    : input  euq_type,
+    wrs1ready: input  logic   ,
+    wrs2ready: input  logic   ,
+
+    wakeup0_valid: input logic  ,
+    wakeup0_preg : input PhysReg,
+    wakeup1_valid: input logic  ,
+    wakeup1_preg : input PhysReg,
+    wakeup2_valid: input logic  ,
+    wakeup2_preg : input PhysReg,
+    wakeup3_valid: input logic  ,
+    wakeup3_preg : input PhysReg,
+
+    // MEMUが処理中のLoadを、ready entryの変化から保護する。
+    lock_valid: input logic ,
+    lock_tag  : input RobTag,
+
     rready: input  logic   ,
     rvalid: output logic   ,
     rdata : output euq_type,
 ) {
     // An 8-slot ring FIFO has the same 7-entry effective capacity.
-    var entries     : euq_type    [7];
-    var entries_next: euq_type    [7];
-    var count       : logic   <3>    ;
-    var count_next  : logic   <3>    ;
-    var keep_count  : logic   <3>    ;
+    struct memory_entry_type {
+        data     : euq_type,
+        rs1_ready: logic   ,
+        rs2_ready: logic   ,
+    }
+
+    var entries     : memory_entry_type    [7];
+    var entries_next: memory_entry_type    [7];
+    var count       : logic            <3>    ;
+    var count_next  : logic            <3>    ;
+    var keep_count  : logic            <3>    ;
+
+    var selected_valid: logic   ;
+    var selected_index: logic<3>;
+
+    // この段階ではMemory Queue内の順序をFIFOで保つ。
+    // ROB head制約は外すが、Load/Storeのメモリ順序は後でdisambiguationを
+    // 追加するまで崩さない。
+    let head_ready: logic = count != 0 && entries[0].rs1_ready && entries[0].rs2_ready;
 
     always_comb {
-        rvalid = count != 0;
-        rdata  = entries[0];
+        selected_valid = 0;
+        selected_index = 0;
+        if lock_valid {
+            for i in 0..7 {
+                if i <: count && entries[i].data.rob_tag == lock_tag {
+                    selected_valid = 1;
+                    selected_index = i as 3;
+                }
+            }
+        } else {
+            selected_valid = head_ready;
+        }
+
+        rvalid = selected_valid;
+        rdata  = entries[selected_index].data;
         wready = count != 7;
     }
 
@@ -36,24 +79,43 @@ module memory_queue (
         entries_next = entries;
         count_next   = count;
 
+        for i in 0..7 {
+            if (wakeup0_valid && entries[i].data.rs1_preg == wakeup0_preg)
+                || (wakeup1_valid && entries[i].data.rs1_preg == wakeup1_preg)
+                || (wakeup2_valid && entries[i].data.rs1_preg == wakeup2_preg)
+                || (wakeup3_valid && entries[i].data.rs1_preg == wakeup3_preg) {
+                entries_next[i].rs1_ready = 1;
+            }
+            if (wakeup0_valid && entries[i].data.rs2_preg == wakeup0_preg)
+                || (wakeup1_valid && entries[i].data.rs2_preg == wakeup1_preg)
+                || (wakeup2_valid && entries[i].data.rs2_preg == wakeup2_preg)
+                || (wakeup3_valid && entries[i].data.rs2_preg == wakeup3_preg) {
+                entries_next[i].rs2_ready = 1;
+            }
+        }
+
         if rvalid && rready {
             for i in 0..6 {
-                entries_next[i] = entries_next[i + 1];
+                if i >= selected_index {
+                    entries_next[i] = entries_next[i + 1];
+                }
             }
             entries_next[6] =  '0;
             count_next      -= 1;
         }
 
         if wvalid && wready {
-            entries_next[count_next] =  wdata;
-            count_next               += 1;
+            entries_next[count_next].data      =  wdata;
+            entries_next[count_next].rs1_ready =  wrs1ready;
+            entries_next[count_next].rs2_ready =  wrs2ready;
+            count_next                         += 1;
         }
 
         // Younger entries are a suffix because insertion is in program order.
         keep_count = 0;
         if squash {
             for i in 0..7 {
-                if i <: count_next && !((entries_next[i].rob_tag - squash_head) >: (squash_tag - squash_head)) {
+                if i <: count_next && !((entries_next[i].data.rob_tag - squash_head) >: (squash_tag - squash_head)) {
                     keep_count += 1;
                 }
             }
@@ -83,4 +145,5 @@ module memory_queue (
             count   = count_next;
         }
     }
+
 }
