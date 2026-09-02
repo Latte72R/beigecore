@@ -55,10 +55,9 @@ module core (
 
     ///////////////////////////////// ID Stage /////////////////////////////////
 
-    // let ids_valid     = i_membus.rvalid;
     let ids_inst_bits = i_membus.rdata;
 
-    let ids_fire      : logic         = !control_hazard && i_membus.rvalid && i_membus.rready;
+    let ids_fire      : logic         = i_membus.rvalid && i_membus.rready;
     var ids_inst_valid: logic        ;
     var ids_ctrl      : InstCtrl     ;
     var ids_expt      : ExceptionInfo;
@@ -432,6 +431,8 @@ module core (
     let alu_is_jalr: logic = alu_rdata.ctrl.is_jump && alu_rdata.ctrl.itype == InstType::I;
     // let alu_is_jal : logic = alu_rdata.ctrl.is_jump && alu_rdata.ctrl.itype == InstType::J;
 
+    let alu_jalr_target: Addr = (alu_read1_data + alu_rdata.imm) & ~1;
+
     var alu_br_take: logic;
     inst alu_bru: brunit (
         funct3: alu_rdata.ctrl.funct3,
@@ -442,7 +443,7 @@ module core (
 
     let alu_mispredict: logic = alu_rvalid
         && ((alu_is_br && alu_rdata.pred_taken != alu_br_take)
-            || (alu_is_jalr && (alu_rdata.pred_taken != 1 || alu_rdata.pred_target != (alu_result & ~1))));
+            || (alu_is_jalr && (alu_rdata.pred_taken != 1 || alu_rdata.pred_target != alu_jalr_target)));
 
     let alu_writes_rd: logic = alu_rvalid && alu_rdata.ctrl.rwb_en && alu_rdata.bits[11:7] != 0;
 
@@ -661,7 +662,7 @@ module core (
         backend_redirect = csr_redirect;
 
         let alu_recovery_pc: Addr = switch {
-            alu_is_jalr: (alu_result & ~1),
+            alu_is_jalr: alu_jalr_target,
             alu_br_take: (alu_rdata.addr + alu_rdata.imm),
             default    : (alu_rdata.addr + (if alu_rdata.ctrl.is_rvc ? 2 : 4))
         };
@@ -799,14 +800,12 @@ module core (
 
         update_valid : alu_rvalid && alu_rready && alu_is_jalr,
         update_pc    : alu_rdata.addr                         ,
-        update_target: alu_result & ~1,
+        update_target: alu_jalr_target                        ,
     );
 
     ///////////////////////////////// FIFO /////////////////////////////////
 
-    inst aluq: issue_queue #(
-        SIZE: 8,
-    ) (
+    inst aluq: issue_queue (
         clk                    ,
         rst                    ,
         flush: backend_redirect,
@@ -846,9 +845,7 @@ module core (
         rdata : memu_rdata      ,
     );
 
-    inst muldivq: issue_queue #(
-        SIZE: 8,
-    ) (
+    inst muldivq: issue_queue (
         clk                    ,
         rst                    ,
         flush: backend_redirect,
@@ -969,17 +966,17 @@ module core (
         read6_data  : mdu_read2_data  ,
         read7_addr  : csru_read_addr  ,
         read7_data  : csru_read_data  ,
-        write1_valid: alu_write_valid ,
-        write1_addr : alu_write_addr  ,
-        write1_data : alu_write_data  ,
+        write1_valid: csru_write_valid,
+        write1_addr : csru_write_addr ,
+        write1_data : csru_write_data ,
         write2_valid: memu_write_valid,
         write2_addr : memu_write_addr ,
         write2_data : memu_write_data ,
         write3_valid: mdu_write_valid ,
         write3_addr : mdu_write_addr  ,
         write3_data : mdu_write_data  ,
-        write4_valid: csru_write_valid,
-        write4_addr : csru_write_addr ,
-        write4_data : csru_write_data ,
+        write4_valid: alu_write_valid ,
+        write4_addr : alu_write_addr  ,
+        write4_data : alu_write_data  ,
     );
 }

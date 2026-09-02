@@ -1,9 +1,7 @@
 import eei::*;
 import corectrl::*;
 
-module issue_queue #(
-    param SIZE: u32 = 8,
-) (
+module issue_queue (
     clk  : input clock,
     rst  : input reset,
     flush: input logic,
@@ -33,36 +31,42 @@ module issue_queue #(
     // entry[0]が最古，entry[count - 1]が最新
     // 任意entryをissueした後は後続entryを前へ詰める
     struct issue_entry_type {
+        valid    : logic   ,
         data     : euq_type,
         rs1_ready: logic   ,
         rs2_ready: logic   ,
     }
 
-    var entries     : issue_entry_type    [SIZE];
-    var entries_next: issue_entry_type    [SIZE];
-    var count       : logic           <4>       ;
-    var count_next  : logic           <4>       ;
+    var entries     : issue_entry_type    [4];
+    var entries_next: issue_entry_type    [4];
+    var count       : logic           <3>    ;
+    var count_next  : logic           <3>    ;
 
     var selected_valid: logic   ;
-    var selected_index: logic<3>;
+    var selected_index: logic<2>;
+
+    let ready0: logic = entries[0].valid && entries[0].rs1_ready && entries[0].rs2_ready;
+    let ready1: logic = entries[1].valid && entries[1].rs1_ready && entries[1].rs2_ready;
+    let ready2: logic = entries[2].valid && entries[2].rs1_ready && entries[2].rs2_ready;
+    let ready3: logic = entries[3].valid && entries[3].rs1_ready && entries[3].rs2_ready;
 
     // readyなentryのうち最も古いものを選択する
     always_comb {
-        selected_valid = 0;
-        selected_index = 0;
+        selected_valid = ready0 || ready1 || ready2 || ready3;
 
-        for i in 0..SIZE {
-            if !selected_valid && i <: count && entries[i].rs1_ready && entries[i].rs2_ready {
-                selected_valid = 1;
-                selected_index = i as 3;
-            }
-        }
+        selected_index = switch {
+            ready0 : 0,
+            ready1 : 1,
+            ready2 : 2,
+            ready3 : 3,
+            default: 0,
+        };
 
         rvalid = selected_valid;
         rdata  = entries[selected_index].data;
     }
 
-    assign wready = count != (SIZE as 4) || (rvalid && rready);
+    assign wready = count != 4 || (rvalid && rready);
 
     // 次状態の更新順序:
     //   1. writeback tagによるwakeup
@@ -72,7 +76,7 @@ module issue_queue #(
         count_next   = count;
         entries_next = entries;
 
-        for i in 0..SIZE {
+        for i in 0..4 {
             if (wakeup0_valid && entries[i].data.rs1_preg == wakeup0_preg)
                 || (wakeup1_valid && entries[i].data.rs1_preg == wakeup1_preg)
                 || (wakeup2_valid && entries[i].data.rs1_preg == wakeup2_preg)
@@ -90,13 +94,13 @@ module issue_queue #(
 
         // issueされたentryを削除し後続entryを1つ前へ詰める
         if rvalid && rready {
-            for i in 0..(SIZE - 1) {
+            for i in 0..3 {
                 if i >= selected_index {
                     entries_next[i] = entries_next[i + 1];
                 }
             }
-            entries_next[SIZE - 1] =  '0;
-            count_next             -= 1;
+            entries_next[3] =  '0;
+            count_next      -= 1;
         }
 
         // 新しい末尾indexに書き込み
@@ -114,7 +118,7 @@ module issue_queue #(
     always_ff {
         if_reset {
             count = 0;
-            for i in 0..SIZE {
+            for i in 0..4 {
                 entries[i] = '0;
             }
         } else if flush {
