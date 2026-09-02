@@ -215,14 +215,17 @@ module core (
     var mdu_wrs2ready   : logic   ;
     var mdu_active_entry: euq_type;
 
-    var csru_wready  : logic   ;
-    var csru_wvalid  : logic   ;
-    var csru_rready  : logic   ;
-    var csru_rvalid  : logic   ;
-    var csru_wdata   : euq_type;
-    var csru_rdata   : euq_type;
-    var csru_grant   : logic   ;
-    var csru_complete: logic   ;
+    var csru_wready      : logic   ;
+    var csru_wvalid      : logic   ;
+    var csru_rready      : logic   ;
+    var csru_rvalid      : logic   ;
+    var csru_wdata       : euq_type;
+    var csru_rdata       : euq_type;
+    var csru_grant       : logic   ;
+    var csru_complete    : logic   ;
+    var csru_issue       : logic   ;
+    var csru_active_valid: logic   ;
+    var csru_active_entry: euq_type;
 
     always_ff {
         if_reset {
@@ -370,7 +373,7 @@ module core (
         memu_read2_addr = memu_rdata.rs2_preg;
         mdu_read1_addr  = mdu_rdata.rs1_preg;
         mdu_read2_addr  = mdu_rdata.rs2_preg;
-        csru_read_addr  = csru_rdata.rs1_preg;
+        csru_read_addr  = csru_active_entry.rs1_preg;
     }
 
     // レジスタ
@@ -550,27 +553,45 @@ module core (
 
     let csru_at_head: logic = csru_rvalid && rob_head_valid && rob_head_tag == csru_rdata.rob_tag;
 
+    always_ff {
+        if_reset {
+            csru_active_valid = 0;
+            csru_active_entry = '0;
+        } else if backend_redirect {
+            csru_active_valid = 0;
+            csru_active_entry = '0;
+        } else {
+            if csru_issue {
+                csru_active_valid = 1;
+                csru_active_entry = csru_rdata;
+            }
+            if csru_complete {
+                csru_active_valid = 0;
+            }
+        }
+    }
+
     inst csru: csrunit (
-        clk                                ,
-        rst                                ,
-        valid      : csru_grant            ,
-        pc         : csru_rdata.addr       ,
-        inst_bits  : csru_rdata.bits       ,
-        ctrl       : csru_rdata.ctrl       ,
-        expt_info  : csru_rdata.expt       ,
-        rd_areg    : csru_rdata.bits[11:7] ,
-        csr_addr   : csru_rdata.bits[31:20],
-        rs1_areg   : csru_rdata.bits[19:15],
-        rs1_data   : csru_read_data        ,
-        can_intr   : 0                     , // 当面は割り込みなし
-        rdata      : csru_result           ,
-        mode       : csru_priv_mode        ,
-        raise_trap : csru_raise_trap       ,
-        trap_vector: csru_trap_vector      ,
-        trap_return: csru_trap_return      ,
-        minstret                           ,
-        led                                ,
-        aclint                             ,
+        clk                                       ,
+        rst                                       ,
+        valid      : csru_grant                   ,
+        pc         : csru_active_entry.addr       ,
+        inst_bits  : csru_active_entry.bits       ,
+        ctrl       : csru_active_entry.ctrl       ,
+        expt_info  : csru_active_entry.expt       ,
+        rd_areg    : csru_active_entry.bits[11:7] ,
+        csr_addr   : csru_active_entry.bits[31:20],
+        rs1_areg   : csru_active_entry.bits[19:15],
+        rs1_data   : csru_read_data               ,
+        can_intr   : 0                            , // 当面は割り込みなし
+        rdata      : csru_result                  ,
+        mode       : csru_priv_mode               ,
+        raise_trap : csru_raise_trap              ,
+        trap_vector: csru_trap_vector             ,
+        trap_return: csru_trap_return             ,
+        minstret                                  ,
+        led                                       ,
+        aclint                                    ,
     );
 
     ///////////////////////////////// EX Stage (Issue / Completion) /////////////////////////////////
@@ -586,7 +607,8 @@ module core (
         // MDUはMDUがidleなら実行開始・継続
         mdu_grant = mdu_rvalid && mdu_ready && !mdu_busy;
         // CSRはROB先頭かつoperand readyなら実行
-        csru_grant = csru_at_head && csru_sources_ready;
+        csru_issue = csru_at_head && csru_sources_ready && !csru_active_valid;
+        csru_grant = csru_active_valid;
         // ALUは(fence_iでないまたはROB先頭)かつoperand readyなら実行開始・継続
         alu_grant = alu_rvalid && (!alu_is_fence_i || alu_at_head);
     }
@@ -603,14 +625,14 @@ module core (
         alu_rready  = alu_grant;
         mdu_rready  = mdu_grant;
         memu_rready = memu_complete;
-        csru_rready = csru_complete;
+        csru_rready = csru_issue;
 
         memu_write_valid = memu_complete && memu_rdata.ctrl.is_load && memu_rdata.bits[11:7] != 0;
         memu_write_addr  = memu_rdata.rd_preg;
         memu_write_data  = memu_result;
 
-        csru_write_valid = csru_complete && csru_rdata.ctrl.rwb_en && csru_rdata.bits[11:7] != 0;
-        csru_write_addr  = csru_rdata.rd_preg;
+        csru_write_valid = csru_complete && csru_active_entry.ctrl.rwb_en && csru_active_entry.bits[11:7] != 0;
+        csru_write_addr  = csru_active_entry.rd_preg;
         csru_write_data  = csru_result;
 
         mdu_write_valid = mdu_complete && mdu_active_entry.ctrl.rwb_en && mdu_active_entry.bits[11:7] != 0;
@@ -644,13 +666,13 @@ module core (
         mdu_complete_data.expt       = mdu_active_entry.expt;
         mdu_complete_data.raise_trap = 0;
 
-        csru_complete_data.addr       = csru_rdata.addr;
-        csru_complete_data.bits       = csru_rdata.bits;
-        csru_complete_data.ctrl       = csru_rdata.ctrl;
-        csru_complete_data.rd_areg    = csru_rdata.bits[11:7];
-        csru_complete_data.old_preg   = csru_rdata.old_preg;
+        csru_complete_data.addr       = csru_active_entry.addr;
+        csru_complete_data.bits       = csru_active_entry.bits;
+        csru_complete_data.ctrl       = csru_active_entry.ctrl;
+        csru_complete_data.rd_areg    = csru_active_entry.bits[11:7];
+        csru_complete_data.old_preg   = csru_active_entry.old_preg;
         csru_complete_data.result     = csru_result;
-        csru_complete_data.expt       = csru_rdata.expt;
+        csru_complete_data.expt       = csru_active_entry.expt;
         csru_complete_data.raise_trap = csru_raise_trap && !csru_trap_return;
     }
 
@@ -748,7 +770,7 @@ module core (
                     $display("K\t%0d\tC\t%0d", trace_cycle, mdu_active_entry.rob_tag);
                 }
                 if csru_complete {
-                    $display("K\t%0d\tC\t%0d", trace_cycle, csru_rdata.rob_tag);
+                    $display("K\t%0d\tC\t%0d", trace_cycle, csru_active_entry.rob_tag);
                 }
                 if rob_commit_fire {
                     $display(
@@ -872,8 +894,9 @@ module core (
     );
 
     inst csrq: fifo #(
-        DATA_TYPE: euq_type,
-        WIDTH    : 3       ,
+        DATA_TYPE    : euq_type,
+        WIDTH        : 3       ,
+        ALLOW_REPLACE: 0       ,
     ) (
         clk                     ,
         rst                     ,
@@ -913,9 +936,9 @@ module core (
         complete2_tag  : mdu_active_entry.rob_tag,
         complete2_data : mdu_complete_data       ,
 
-        complete3_valid: csru_complete     ,
-        complete3_tag  : csru_rdata.rob_tag,
-        complete3_data : csru_complete_data,
+        complete3_valid: csru_complete            ,
+        complete3_tag  : csru_active_entry.rob_tag,
+        complete3_data : csru_complete_data       ,
 
         commit_valid: rob_commit_valid,
         commit_ready: rob_commit_ready,
