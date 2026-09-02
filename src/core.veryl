@@ -333,8 +333,8 @@ module core (
         rob_allocate_data.bits       = ids_inst_bits;
         rob_allocate_data.ctrl       = ids_ctrl;
         rob_allocate_data.rd_areg    = ids_rd_areg;
+        rob_allocate_data.rd_preg    = ids_new_preg;
         rob_allocate_data.old_preg   = ids_old_preg;
-        rob_allocate_data.result     = 0; // complete 時に上書き
         rob_allocate_data.expt       = ids_expt;
         rob_allocate_data.raise_trap = 0;
     }
@@ -372,9 +372,6 @@ module core (
         mdu_read2_addr  = mdu_rdata.rs2_preg;
         csru_read_addr  = csru_rdata.rs1_preg;
     }
-
-    // レジスタ
-    var regfile: UIntX<AREG_COUNT>;
 
     // *_grant     実行ユニットへ命令を受理させる
     // *_done      実行ユニットの処理結果が有効
@@ -621,8 +618,8 @@ module core (
         alu_complete_data.bits       = alu_rdata.bits;
         alu_complete_data.ctrl       = alu_rdata.ctrl;
         alu_complete_data.rd_areg    = alu_rdata.bits[11:7];
+        alu_complete_data.rd_preg    = alu_rdata.rd_preg;
         alu_complete_data.old_preg   = alu_rdata.old_preg;
-        alu_complete_data.result     = alu_writeback_data;
         alu_complete_data.expt       = alu_rdata.expt;
         alu_complete_data.raise_trap = 0;
 
@@ -630,8 +627,8 @@ module core (
         memu_complete_data.bits       = memu_rdata.bits;
         memu_complete_data.ctrl       = memu_rdata.ctrl;
         memu_complete_data.rd_areg    = memu_rdata.bits[11:7];
+        memu_complete_data.rd_preg    = memu_rdata.rd_preg;
         memu_complete_data.old_preg   = memu_rdata.old_preg;
-        memu_complete_data.result     = memu_result;
         memu_complete_data.expt       = memu_rdata.expt;
         memu_complete_data.raise_trap = 0;
 
@@ -639,8 +636,8 @@ module core (
         mdu_complete_data.bits       = mdu_active_entry.bits;
         mdu_complete_data.ctrl       = mdu_active_entry.ctrl;
         mdu_complete_data.rd_areg    = mdu_active_entry.bits[11:7];
+        mdu_complete_data.rd_preg    = mdu_active_entry.rd_preg;
         mdu_complete_data.old_preg   = mdu_active_entry.old_preg;
-        mdu_complete_data.result     = mdu_result;
         mdu_complete_data.expt       = mdu_active_entry.expt;
         mdu_complete_data.raise_trap = 0;
 
@@ -648,8 +645,8 @@ module core (
         csru_complete_data.bits       = csru_rdata.bits;
         csru_complete_data.ctrl       = csru_rdata.ctrl;
         csru_complete_data.rd_areg    = csru_rdata.bits[11:7];
+        csru_complete_data.rd_preg    = csru_rdata.rd_preg;
         csru_complete_data.old_preg   = csru_rdata.old_preg;
-        csru_complete_data.result     = csru_result;
         csru_complete_data.expt       = csru_rdata.expt;
         csru_complete_data.raise_trap = csru_raise_trap && !csru_trap_return;
     }
@@ -685,12 +682,6 @@ module core (
     let rob_commit_fire: logic = rob_commit_valid && rob_commit_ready && rob_commit_data.ctrl.rwb_en
         && rob_commit_data.rd_areg != 0 && !rob_commit_data.raise_trap;
 
-    always_ff {
-        // ROB先頭が完成済み & コミットが成立 & レジスタ書込み命令 & x0ではない & trapではない
-        if rob_commit_fire {
-            regfile[rob_commit_data.rd_areg] = rob_commit_data.result;
-        }
-    }
     // serial_pending := 制御結果がまだ確定していない命令が存在する
     always_ff {
         if_reset {

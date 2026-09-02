@@ -29,7 +29,8 @@ SYNTH_PARTS ?= core inst_fetcher amounit mmio_controller aclint_memory uart16550
 TIMING_PATHS ?= 3
 
 RV_TEST_DIR ?= test/share/riscv-tests
-RV_TEST_FILTER ?= rv64ui-p- rv64um-p- rv64ua-p- rv64uc-p-
+# rv64ua-p- は除外
+RV_TEST_FILTER ?= rv64ui-p- rv64um-p- rv64uc-p-
 RV_TEST_EXCLUDE ?= ma_data
 
 BOOTROM_HEX := bootrom.hex
