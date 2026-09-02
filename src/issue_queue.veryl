@@ -42,42 +42,74 @@ module issue_queue (
         ready    : logic   ,
     }
 
-    var entries     : issue_entry_type    [4];
-    var entries_next: issue_entry_type    [4];
-    var count       : logic           <3>    ;
-    var count_next  : logic           <3>    ;
+    var entries     : issue_entry_type    [8];
+    var entries_next: issue_entry_type    [8];
+    var count       : logic           <4>    ;
+    var count_next  : logic           <4>    ;
 
-    var selected_valid: logic       ;
-    var selected_index: logic<2>    ;
-    var keep_count    : logic<3>    ;
-    var squash_keep   : logic    [4];
-    var squash_sum1   : logic<2> [2];
-    var squash_sum2   : logic<3>    ;
+    var selected_valid: logic          ;
+    var selected_index: logic   <3>    ;
+    var lower_index   : logic   <3>    ;
+    var upper_index   : logic   <3>    ;
+    var lower_data    : euq_type       ;
+    var upper_data    : euq_type       ;
+    var keep_count    : logic   <4>    ;
+    var squash_keep   : logic       [8];
+    var squash_sum1   : logic   <2> [4];
+    var squash_sum2   : logic   <3> [2];
+    var squash_sum3   : logic   <4>    ;
 
-    let ready0: logic = entries[0].valid && entries[0].ready;
-    let ready1: logic = entries[1].valid && entries[1].ready;
-    let ready2: logic = entries[2].valid && entries[2].ready;
-    let ready3: logic = entries[3].valid && entries[3].ready;
+    let ready0     : logic = entries[0].valid && entries[0].ready;
+    let ready1     : logic = entries[1].valid && entries[1].ready;
+    let ready2     : logic = entries[2].valid && entries[2].ready;
+    let ready3     : logic = entries[3].valid && entries[3].ready;
+    let ready4     : logic = entries[4].valid && entries[4].ready;
+    let ready5     : logic = entries[5].valid && entries[5].ready;
+    let ready6     : logic = entries[6].valid && entries[6].ready;
+    let ready7     : logic = entries[7].valid && entries[7].ready;
+    let lower_ready: logic = ready0 || ready1 || ready2 || ready3;
 
     // readyなentryのうち最も古いものを選択する
     always_comb {
-        selected_valid = ready0 || ready1 || ready2 || ready3;
+        selected_valid = ready0 || ready1 || ready2 || ready3 || ready4 || ready5 || ready6 || ready7;
 
         selected_index = switch {
             ready0 : 0,
             ready1 : 1,
             ready2 : 2,
             ready3 : 3,
+            ready4 : 4,
+            ready5 : 5,
+            ready6 : 6,
+            ready7 : 7,
             default: 0,
         };
 
-        rvalid = selected_valid;
-        rdata  = entries[selected_index].data;
+        // 8-wayのentry muxを4-way mux二つに分け、選択経路を短縮する。
+        // lower側にreadyがあれば必ずそちらが最古なので、upper側は選ばない。
+        rvalid      = selected_valid;
+        lower_index = switch {
+            ready0 : 0,
+            ready1 : 1,
+            ready2 : 2,
+            ready3 : 3,
+            default: 0,
+        };
+        upper_index = switch {
+            ready4 : 4,
+            ready5 : 5,
+            ready6 : 6,
+            ready7 : 7,
+            default: 4,
+        };
+        lower_data = entries[lower_index].data;
+        upper_data = entries[upper_index].data;
+        rdata      = if lower_ready ? lower_data : upper_data;
     }
 
     // When full, accept a new entry in the same cycle that the selected
     // entry is issued, so a full queue does not create a dispatch bubble.
-    assign wready = count != 4 || (rvalid && rready);
+    assign wready = count != 8 || (rvalid && rready);
 
     // 次状態の更新順序:
     //   1. writeback tagによるwakeup
@@ -87,15 +119,18 @@ module issue_queue (
         count_next   = count;
         entries_next = entries;
         keep_count   = 0;
-        for i in 0..4 {
+        for i in 0..8 {
             squash_keep[i] = 0;
         }
-        for i in 0..2 {
+        for i in 0..4 {
             squash_sum1[i] = 0;
         }
-        squash_sum2 = 0;
+        for i in 0..2 {
+            squash_sum2[i] = 0;
+        }
+        squash_sum3 = 0;
 
-        for i in 0..4 {
+        for i in 0..8 {
             if (wakeup0_valid && entries[i].data.rs1_preg == wakeup0_preg)
                 || (wakeup1_valid && entries[i].data.rs1_preg == wakeup1_preg)
                 || (wakeup2_valid && entries[i].data.rs1_preg == wakeup2_preg)
@@ -115,17 +150,17 @@ module issue_queue (
 
         // issueされたentryを削除し後続entryを1つ前へ詰める
         if rvalid && rready {
-            for i in 0..3 {
+            for i in 0..7 {
                 if i >= selected_index {
                     entries_next[i] = entries_next[i + 1];
                 }
             }
-            entries_next[3] =  '0;
+            entries_next[7] =  '0;
             count_next      -= 1;
         }
 
         // 新しい末尾indexに書き込み
-        let write_index: logic<2> = count_next[1:0];
+        let write_index: logic<3> = count_next[2:0];
         if wvalid && wready {
             entries_next[write_index].valid     =  1;
             entries_next[write_index].data      =  wdata;
@@ -138,7 +173,7 @@ module issue_queue (
         // Entries are kept in program order, so all instructions younger than
         // the resolving branch form one suffix.  Keep only the older prefix.
         if squash {
-            for i in 0..4 {
+            for i in 0..8 {
                 // branch_redirect時はcontrol_hazardでissue/dispatchが止まるため、
                 // recovery対象は現在のentryだけで判定できる。
                 squash_keep[i] = entries[i].valid
@@ -149,8 +184,12 @@ module issue_queue (
             }
             squash_sum1[0] = {1'b0, squash_keep[0]} + {1'b0, squash_keep[1]};
             squash_sum1[1] = {1'b0, squash_keep[2]} + {1'b0, squash_keep[3]};
-            squash_sum2    = {1'b0, squash_sum1[0]} + {1'b0, squash_sum1[1]};
-            keep_count     = squash_sum2;
+            squash_sum1[2] = {1'b0, squash_keep[4]} + {1'b0, squash_keep[5]};
+            squash_sum1[3] = {1'b0, squash_keep[6]} + {1'b0, squash_keep[7]};
+            squash_sum2[0] = {1'b0, squash_sum1[0]} + {1'b0, squash_sum1[1]};
+            squash_sum2[1] = {1'b0, squash_sum1[2]} + {1'b0, squash_sum1[3]};
+            squash_sum3    = {1'b0, squash_sum2[0]} + {1'b0, squash_sum2[1]};
+            keep_count     = squash_sum3;
             count_next     = keep_count;
         }
     }
@@ -160,12 +199,12 @@ module issue_queue (
     always_ff {
         if_reset {
             count = 0;
-            for i in 0..4 {
+            for i in 0..8 {
                 entries[i] = '0;
             }
         } else if flush {
             count = 0;
-            for i in 0..4 {
+            for i in 0..8 {
                 entries[i].valid = 0;
             }
         } else {
