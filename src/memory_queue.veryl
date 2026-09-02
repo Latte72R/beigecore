@@ -1,0 +1,74 @@
+import eei::*;
+import corectrl::*;
+
+// In-order memory queue with selective removal of a mispredicted branch's
+// younger entries.  ROB order and queue insertion order are identical.
+module memory_queue (
+    clk  : input clock,
+    rst  : input reset,
+    flush: input logic,
+
+    squash     : input logic ,
+    squash_head: input RobTag,
+    squash_tag : input RobTag,
+
+    wready: output logic   ,
+    wvalid: input  logic   ,
+    wdata : input  euq_type,
+    rready: input  logic   ,
+    rvalid: output logic   ,
+    rdata : output euq_type,
+) {
+    type Ptr  = logic   <3>    ;
+    var head: Ptr            ;
+    var tail: Ptr            ;
+    var mem : euq_type    [8];
+
+    let tail_plus1: Ptr   = tail + 1;
+    let full      : logic = tail_plus1 == head;
+    let pop       : logic = rready && rvalid;
+
+    var squash_tail: Ptr;
+    always_comb {
+        rvalid = head != tail;
+        rdata  = mem[head];
+        wready = !full;
+
+        squash_tail   = tail;
+        var found_younger: logic;
+        var scanning     : logic;
+        found_younger = 0;
+        scanning      = head != tail;
+        for i in 0..8 {
+            let index: Ptr = head + i as Ptr;
+            if scanning && !found_younger && (mem[index].rob_tag - squash_head) >: (squash_tag - squash_head) {
+                squash_tail   = index;
+                found_younger = 1;
+            }
+            if scanning && index + 1 == tail {
+                scanning = 0;
+            }
+        }
+    }
+
+    #[allow(missing_reset_statement)]
+    always_ff {
+        if_reset {
+            head = 0;
+            tail = 0;
+        } else if flush {
+            head = 0;
+            tail = 0;
+        } else {
+            if squash {
+                tail = squash_tail;
+            } else if wready && wvalid {
+                mem[tail] = wdata;
+                tail      = tail + 1;
+            }
+            if pop {
+                head = head + 1;
+            }
+        }
+    }
+}

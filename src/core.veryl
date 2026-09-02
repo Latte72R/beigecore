@@ -530,7 +530,8 @@ module core (
         if_reset {
             mdu_busy         = 0;
             mdu_active_entry = '0;
-        } else if backend_redirect {
+        } else if csr_redirect
+            || (branch_redirect && (mdu_active_entry.rob_tag - rob_head_tag) >: (alu_rdata.rob_tag - rob_head_tag)) {
             mdu_busy         = 0;
             mdu_active_entry = '0;
         } else {
@@ -901,9 +902,13 @@ module core (
     ///////////////////////////////// FIFO /////////////////////////////////
 
     inst aluq: issue_queue (
-        clk                    ,
-        rst                    ,
-        flush: backend_redirect,
+        clk                ,
+        rst                ,
+        flush: csr_redirect,
+
+        squash     : branch_redirect  ,
+        squash_head: rob_head_tag     ,
+        squash_tag : alu_rdata.rob_tag,
 
         wvalid   : alu_wvalid   ,
         wready   : alu_wready   ,
@@ -925,26 +930,31 @@ module core (
         rdata : alu_rdata ,
     );
 
-    inst memq: fifo #(
-        DATA_TYPE    : euq_type,
-        WIDTH        : 3       ,
-        ALLOW_REPLACE: 0       ,
-    ) (
-        clk                     ,
-        rst                     ,
-        flush : backend_redirect,
-        wready: memu_wready     ,
-        wvalid: memu_wvalid     ,
-        wdata : memu_wdata      ,
-        rready: memu_rready     ,
-        rvalid: memu_rvalid     ,
-        rdata : memu_rdata      ,
+    inst memq: memory_queue (
+        clk                ,
+        rst                ,
+        flush: csr_redirect,
+
+        squash     : branch_redirect  ,
+        squash_head: rob_head_tag     ,
+        squash_tag : alu_rdata.rob_tag,
+
+        wready: memu_wready,
+        wvalid: memu_wvalid,
+        wdata : memu_wdata ,
+        rready: memu_rready,
+        rvalid: memu_rvalid,
+        rdata : memu_rdata ,
     );
 
     inst muldivq: issue_queue (
-        clk                    ,
-        rst                    ,
-        flush: backend_redirect,
+        clk                ,
+        rst                ,
+        flush: csr_redirect,
+
+        squash     : branch_redirect  ,
+        squash_head: rob_head_tag     ,
+        squash_tag : alu_rdata.rob_tag,
 
         wvalid   : mdu_wvalid   ,
         wready   : mdu_wready   ,

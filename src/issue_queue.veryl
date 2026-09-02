@@ -6,6 +6,10 @@ module issue_queue (
     rst  : input reset,
     flush: input logic,
 
+    squash     : input logic ,
+    squash_head: input RobTag,
+    squash_tag : input RobTag,
+
     // dispatch
     wvalid   : input  logic   ,
     wready   : output logic   ,
@@ -44,6 +48,7 @@ module issue_queue (
 
     var selected_valid: logic   ;
     var selected_index: logic<2>;
+    var keep_count    : logic<3>;
 
     let ready0: logic = entries[0].valid && entries[0].rs1_ready && entries[0].rs2_ready;
     let ready1: logic = entries[1].valid && entries[1].rs1_ready && entries[1].rs2_ready;
@@ -76,6 +81,7 @@ module issue_queue (
     always_comb {
         count_next   = count;
         entries_next = entries;
+        keep_count   = 0;
 
         for i in 0..4 {
             if (wakeup0_valid && entries[i].data.rs1_preg == wakeup0_preg)
@@ -112,6 +118,20 @@ module issue_queue (
             entries_next[write_index].rs1_ready =  wrs1ready;
             entries_next[write_index].rs2_ready =  wrs2ready;
             count_next                          += 1;
+        }
+
+        // Entries are kept in program order, so all instructions younger than
+        // the resolving branch form one suffix.  Keep only the older prefix.
+        if squash {
+            for i in 0..4 {
+                if entries_next[i].valid
+                    && !((entries_next[i].data.rob_tag - squash_head) >: (squash_tag - squash_head)) {
+                    keep_count += 1;
+                } else {
+                    entries_next[i].valid = 0;
+                }
+            }
+            count_next = keep_count;
         }
     }
 
