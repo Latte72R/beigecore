@@ -212,6 +212,10 @@ module core (
     var mdu_grant   : logic   ;
     var mdu_complete: logic   ;
 
+    var mdu_wrs1ready   : logic   ;
+    var mdu_wrs2ready   : logic   ;
+    var mdu_active_entry: euq_type;
+
     var csru_wready  : logic   ;
     var csru_wvalid  : logic   ;
     var csru_rready  : logic   ;
@@ -302,6 +306,16 @@ module core (
             || (mdu_write_valid && mdu_write_addr == dispatch_data.rs1_preg)
             || (csru_write_valid && csru_write_addr == dispatch_data.rs1_preg);
         alu_wrs2ready = !dispatch_data.uses_rs2 || !prf_busy[dispatch_data.rs2_preg]
+            || (alu_write_valid && alu_write_addr == dispatch_data.rs2_preg)
+            || (memu_write_valid && memu_write_addr == dispatch_data.rs2_preg)
+            || (mdu_write_valid && mdu_write_addr == dispatch_data.rs2_preg)
+            || (csru_write_valid && csru_write_addr == dispatch_data.rs2_preg);
+        mdu_wrs1ready = !dispatch_data.uses_rs1 || !prf_busy[dispatch_data.rs1_preg]
+            || (alu_write_valid && alu_write_addr == dispatch_data.rs1_preg)
+            || (memu_write_valid && memu_write_addr == dispatch_data.rs1_preg)
+            || (mdu_write_valid && mdu_write_addr == dispatch_data.rs1_preg)
+            || (csru_write_valid && csru_write_addr == dispatch_data.rs1_preg);
+        mdu_wrs2ready = !dispatch_data.uses_rs2 || !prf_busy[dispatch_data.rs2_preg]
             || (alu_write_valid && alu_write_addr == dispatch_data.rs2_preg)
             || (memu_write_valid && memu_write_addr == dispatch_data.rs2_preg)
             || (mdu_write_valid && mdu_write_addr == dispatch_data.rs2_preg)
@@ -468,13 +482,17 @@ module core (
 
     always_ff {
         if_reset {
-            mdu_busy = 0;
+            mdu_busy         = 0;
+            mdu_active_entry = '0;
         } else if backend_redirect {
-            mdu_busy = 0;
+            mdu_busy         = 0;
+            mdu_active_entry = '0;
         } else {
             if mdu_grant {
-                mdu_busy = 1;
+                mdu_busy         = 1;
+                mdu_active_entry = mdu_rdata;
             }
+
             if mdu_complete {
                 mdu_busy = 0;
             }
@@ -556,20 +574,16 @@ module core (
 
     ///////////////////////////////// EX Stage (Issue / Completion) /////////////////////////////////
 
-    // let alu_sources_ready : logic = (!alu_rdata.uses_rs1 || !prf_busy[alu_rdata.rs1_preg])
-    //     && (!alu_rdata.uses_rs2 || !prf_busy[alu_rdata.rs2_preg]);
     let csru_sources_ready: logic = (!csru_rdata.uses_rs1 || !prf_busy[csru_rdata.rs1_preg])
         && (!csru_rdata.uses_rs2 || !prf_busy[csru_rdata.rs2_preg]);
     let memu_sources_ready: logic = (!memu_rdata.uses_rs1 || !prf_busy[memu_rdata.rs1_preg])
         && (!memu_rdata.uses_rs2 || !prf_busy[memu_rdata.rs2_preg]);
-    let mdu_sources_ready : logic = (!mdu_rdata.uses_rs1 || !prf_busy[mdu_rdata.rs1_preg])
-        && (!mdu_rdata.uses_rs2 || !prf_busy[mdu_rdata.rs2_preg]);
 
     always_comb {
         // MEMはROB先頭かつoperand readyなら実行開始・継続
         memu_grant = memu_at_head && memu_sources_ready;
         // MDUはMDUがidleなら実行開始・継続
-        mdu_grant = mdu_rvalid && mdu_sources_ready && mdu_ready && !mdu_busy;
+        mdu_grant = mdu_rvalid && mdu_ready && !mdu_busy;
         // CSRはROB先頭かつoperand readyなら実行
         csru_grant = csru_at_head && csru_sources_ready;
         // ALUは(fence_iでないまたはROB先頭)かつoperand readyなら実行開始・継続
@@ -578,16 +592,16 @@ module core (
 
     always_comb {
         alu_complete  = alu_grant;
-        csru_complete = csru_grant;
         mdu_complete  = mdu_busy && mdu_result_valid;
         memu_complete = memu_grant && !memu_stall;
+        csru_complete = csru_grant;
     }
 
     always_comb {
         // MEM -> WB
-        alu_rready  = alu_complete;
+        alu_rready  = alu_grant;
+        mdu_rready  = mdu_grant;
         memu_rready = memu_complete;
-        mdu_rready  = mdu_complete;
         csru_rready = csru_complete;
 
         memu_write_valid = memu_complete && memu_rdata.ctrl.is_load && memu_rdata.bits[11:7] != 0;
@@ -598,8 +612,8 @@ module core (
         csru_write_addr  = csru_rdata.rd_preg;
         csru_write_data  = csru_result;
 
-        mdu_write_valid = mdu_complete && mdu_rdata.ctrl.rwb_en && mdu_rdata.bits[11:7] != 0;
-        mdu_write_addr  = mdu_rdata.rd_preg;
+        mdu_write_valid = mdu_complete && mdu_active_entry.ctrl.rwb_en && mdu_active_entry.bits[11:7] != 0;
+        mdu_write_addr  = mdu_active_entry.rd_preg;
         mdu_write_data  = mdu_result;
 
         alu_complete_data.addr       = alu_rdata.addr;
@@ -620,13 +634,13 @@ module core (
         memu_complete_data.expt       = memu_rdata.expt;
         memu_complete_data.raise_trap = 0;
 
-        mdu_complete_data.addr       = mdu_rdata.addr;
-        mdu_complete_data.bits       = mdu_rdata.bits;
-        mdu_complete_data.ctrl       = mdu_rdata.ctrl;
-        mdu_complete_data.rd_areg    = mdu_rdata.bits[11:7];
-        mdu_complete_data.old_preg   = mdu_rdata.old_preg;
+        mdu_complete_data.addr       = mdu_active_entry.addr;
+        mdu_complete_data.bits       = mdu_active_entry.bits;
+        mdu_complete_data.ctrl       = mdu_active_entry.ctrl;
+        mdu_complete_data.rd_areg    = mdu_active_entry.bits[11:7];
+        mdu_complete_data.old_preg   = mdu_active_entry.old_preg;
         mdu_complete_data.result     = mdu_result;
-        mdu_complete_data.expt       = mdu_rdata.expt;
+        mdu_complete_data.expt       = mdu_active_entry.expt;
         mdu_complete_data.raise_trap = 0;
 
         csru_complete_data.addr       = csru_rdata.addr;
@@ -730,7 +744,7 @@ module core (
                     $display("K\t%0d\tC\t%0d", trace_cycle, memu_rdata.rob_tag);
                 }
                 if mdu_complete {
-                    $display("K\t%0d\tC\t%0d", trace_cycle, mdu_rdata.rob_tag);
+                    $display("K\t%0d\tC\t%0d", trace_cycle, mdu_active_entry.rob_tag);
                 }
                 if csru_complete {
                     $display("K\t%0d\tC\t%0d", trace_cycle, csru_rdata.rob_tag);
@@ -832,19 +846,31 @@ module core (
         rdata : memu_rdata      ,
     );
 
-    inst muldivq: fifo #(
-        DATA_TYPE: euq_type,
-        WIDTH    : 3       ,
+    inst muldivq: issue_queue #(
+        SIZE: 8,
     ) (
-        clk                     ,
-        rst                     ,
-        flush : backend_redirect,
-        wready: mdu_wready      ,
-        wvalid: mdu_wvalid      ,
-        wdata : mdu_wdata       ,
-        rready: mdu_rready      ,
-        rvalid: mdu_rvalid      ,
-        rdata : mdu_rdata       ,
+        clk                    ,
+        rst                    ,
+        flush: backend_redirect,
+
+        wvalid   : mdu_wvalid   ,
+        wready   : mdu_wready   ,
+        wdata    : mdu_wdata    ,
+        wrs1ready: mdu_wrs1ready,
+        wrs2ready: mdu_wrs2ready,
+
+        wakeup0_valid: alu_write_valid ,
+        wakeup0_preg : alu_write_addr  ,
+        wakeup1_valid: memu_write_valid,
+        wakeup1_preg : memu_write_addr ,
+        wakeup2_valid: mdu_write_valid ,
+        wakeup2_preg : mdu_write_addr  ,
+        wakeup3_valid: csru_write_valid,
+        wakeup3_preg : csru_write_addr ,
+
+        rvalid: mdu_rvalid,
+        rready: mdu_rready,
+        rdata : mdu_rdata ,
     );
 
     inst csrq: fifo #(
@@ -885,9 +911,9 @@ module core (
         complete1_tag  : memu_rdata.rob_tag,
         complete1_data : memu_complete_data,
 
-        complete2_valid: mdu_complete     ,
-        complete2_tag  : mdu_rdata.rob_tag,
-        complete2_data : mdu_complete_data,
+        complete2_valid: mdu_complete            ,
+        complete2_tag  : mdu_active_entry.rob_tag,
+        complete2_data : mdu_complete_data       ,
 
         complete3_valid: csru_complete     ,
         complete3_tag  : csru_rdata.rob_tag,
