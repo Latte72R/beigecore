@@ -16,11 +16,6 @@ module core (
     var rob_allocate_data : rob_entry_type;
     var rob_allocate_tag  : RobTag        ;
 
-    var alu_complete_data : rob_entry_type;
-    var memu_complete_data: rob_entry_type;
-    var mdu_complete_data : rob_entry_type;
-    var csru_complete_data: rob_entry_type;
-
     var rob_commit_valid: logic         ;
     var rob_commit_ready: logic         ;
     var rob_commit_data : rob_entry_type;
@@ -613,42 +608,6 @@ module core (
         mdu_write_valid = mdu_complete && mdu_active_entry.ctrl.rwb_en && mdu_active_entry.bits[11:7] != 0;
         mdu_write_addr  = mdu_active_entry.rd_preg;
         mdu_write_data  = mdu_result;
-
-        alu_complete_data.addr       = alu_rdata.addr;
-        alu_complete_data.bits       = alu_rdata.bits;
-        alu_complete_data.ctrl       = alu_rdata.ctrl;
-        alu_complete_data.rd_areg    = alu_rdata.bits[11:7];
-        alu_complete_data.rd_preg    = alu_rdata.rd_preg;
-        alu_complete_data.old_preg   = alu_rdata.old_preg;
-        alu_complete_data.expt       = alu_rdata.expt;
-        alu_complete_data.raise_trap = 0;
-
-        memu_complete_data.addr       = memu_rdata.addr;
-        memu_complete_data.bits       = memu_rdata.bits;
-        memu_complete_data.ctrl       = memu_rdata.ctrl;
-        memu_complete_data.rd_areg    = memu_rdata.bits[11:7];
-        memu_complete_data.rd_preg    = memu_rdata.rd_preg;
-        memu_complete_data.old_preg   = memu_rdata.old_preg;
-        memu_complete_data.expt       = memu_rdata.expt;
-        memu_complete_data.raise_trap = 0;
-
-        mdu_complete_data.addr       = mdu_active_entry.addr;
-        mdu_complete_data.bits       = mdu_active_entry.bits;
-        mdu_complete_data.ctrl       = mdu_active_entry.ctrl;
-        mdu_complete_data.rd_areg    = mdu_active_entry.bits[11:7];
-        mdu_complete_data.rd_preg    = mdu_active_entry.rd_preg;
-        mdu_complete_data.old_preg   = mdu_active_entry.old_preg;
-        mdu_complete_data.expt       = mdu_active_entry.expt;
-        mdu_complete_data.raise_trap = 0;
-
-        csru_complete_data.addr       = csru_rdata.addr;
-        csru_complete_data.bits       = csru_rdata.bits;
-        csru_complete_data.ctrl       = csru_rdata.ctrl;
-        csru_complete_data.rd_areg    = csru_rdata.bits[11:7];
-        csru_complete_data.rd_preg    = csru_rdata.rd_preg;
-        csru_complete_data.old_preg   = csru_rdata.old_preg;
-        csru_complete_data.expt       = csru_rdata.expt;
-        csru_complete_data.raise_trap = csru_raise_trap && !csru_trap_return;
     }
 
     always_comb {
@@ -893,19 +852,15 @@ module core (
 
         complete0_valid: alu_complete     ,
         complete0_tag  : alu_rdata.rob_tag,
-        complete0_data : alu_complete_data,
 
         complete1_valid: memu_complete     ,
         complete1_tag  : memu_rdata.rob_tag,
-        complete1_data : memu_complete_data,
 
         complete2_valid: mdu_complete            ,
         complete2_tag  : mdu_active_entry.rob_tag,
-        complete2_data : mdu_complete_data       ,
 
         complete3_valid: csru_complete     ,
         complete3_tag  : csru_rdata.rob_tag,
-        complete3_data : csru_complete_data,
 
         commit_valid: rob_commit_valid,
         commit_ready: rob_commit_ready,

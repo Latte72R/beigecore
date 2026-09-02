@@ -15,24 +15,20 @@ module reorder_buffer #(
 
     // 実行結果を埋める (complete)
     // ALU
-    complete0_valid: input logic           ,
-    complete0_tag  : input logic    <WIDTH>,
-    complete0_data : input DATA_TYPE       ,
+    complete0_valid: input logic       ,
+    complete0_tag  : input logic<WIDTH>,
 
     // MEMU
-    complete1_valid: input logic           ,
-    complete1_tag  : input logic    <WIDTH>,
-    complete1_data : input DATA_TYPE       ,
+    complete1_valid: input logic       ,
+    complete1_tag  : input logic<WIDTH>,
 
     // MDU
-    complete2_valid: input logic           ,
-    complete2_tag  : input logic    <WIDTH>,
-    complete2_data : input DATA_TYPE       ,
+    complete2_valid: input logic       ,
+    complete2_tag  : input logic<WIDTH>,
 
     // CSRU
-    complete3_valid: input logic           ,
-    complete3_tag  : input logic    <WIDTH>,
-    complete3_data : input DATA_TYPE       ,
+    complete3_valid: input logic       ,
+    complete3_tag  : input logic<WIDTH>,
 
     // 先頭の完成済み命令を読みだす (commit)
     commit_valid: output logic    ,
@@ -91,19 +87,15 @@ module reorder_buffer #(
                         tail            = tail + 1;
                     }
                     if complete0_valid {
-                        mem[complete0_tag]       = complete0_data;
                         completed[complete0_tag] = 1;
                     }
                     if complete1_valid {
-                        mem[complete1_tag]       = complete1_data;
                         completed[complete1_tag] = 1;
                     }
                     if complete2_valid {
-                        mem[complete2_tag]       = complete2_data;
                         completed[complete2_tag] = 1;
                     }
                     if complete3_valid {
-                        mem[complete3_tag]       = complete3_data;
                         completed[complete3_tag] = 1;
                     }
                     if commit_fire {
