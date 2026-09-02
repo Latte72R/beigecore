@@ -45,12 +45,14 @@ module core (
     var backend_redirect      : logic;
     var alu_redirect          : logic;
     var branch_redirect       : logic;
+    var jalr_redirect         : logic;
     var csr_redirect          : logic;
 
     // Redirectは実行結果のcycleから1cycle遅らせてfrontend/backendへ伝える。
     // ALUの分岐判定からdispatch queueの更新までを同一組合せ経路にしないため。
     var redirect_pending   : logic ;
     var redirect_is_branch : logic ;
+    var redirect_is_jalr   : logic ;
     var redirect_is_csr    : logic ;
     var redirect_is_fence_i: logic ;
     var redirect_pc        : Addr  ;
@@ -779,22 +781,22 @@ module core (
         memu_operand_capture = memu_rvalid && memu_rdata.ctrl.is_load && !memu_active_valid && !memu_operand_pending
             && !storebuf_commit_busy && !control_hazard;
         memu_start           = memu_operand_pending && memu_operand_entry.ctrl.is_load && !memu_load_blocked
-            && !memu_active_valid && !storebuf_commit_busy && !branch_redirect && !csr_redirect;
+            && !memu_active_valid && !storebuf_commit_busy && !backend_redirect;
         // 完全にStore Bufferから転送できるLoadはmemunitを起動しない。
         memu_grant        = memu_active_valid || (memu_start && !memu_forward_valid);
         memu_kill         = csr_redirect
-            || (branch_redirect && memu_active_valid && (memu_active_entry.rob_tag - redirect_head_tag)
-                >: (redirect_tag - redirect_head_tag));
+            || ((branch_redirect || jalr_redirect) && memu_active_valid
+                && (memu_active_entry.rob_tag - redirect_head_tag) >: (redirect_tag - redirect_head_tag));
         memu_operand_kill = csr_redirect
-            || (branch_redirect && memu_operand_pending && (memu_operand_entry.rob_tag - redirect_head_tag)
-                >: (redirect_tag - redirect_head_tag));
+            || ((branch_redirect || jalr_redirect) && memu_operand_pending
+                && (memu_operand_entry.rob_tag - redirect_head_tag) >: (redirect_tag - redirect_head_tag));
         memu_drop_done    = memu_active_valid && memu_killed && !memu_stall;
         // MDUはMDUがidleなら実行開始・継続
         // 分岐回復と同じcycleに発行すると、queueから消えたyoung命令が
         // MDUへ入ってしまうため、回復完了後のcycleで再発行する。
-        mdu_grant = mdu_rvalid && mdu_ready && !mdu_busy && !branch_redirect && !csr_redirect;
+        mdu_grant = mdu_rvalid && mdu_ready && !mdu_busy && !backend_redirect;
         mdu_kill  = csr_redirect
-            || (branch_redirect && mdu_busy && (mdu_active_entry.rob_tag - redirect_head_tag)
+            || ((branch_redirect || jalr_redirect) && mdu_busy && (mdu_active_entry.rob_tag - redirect_head_tag)
                 >: (redirect_tag - redirect_head_tag));
         // CSRはROB先頭かつoperand readyなら実行
         csru_issue = csru_at_head && csru_sources_ready && !csru_active_valid && !control_hazard;
@@ -822,7 +824,7 @@ module core (
         csru_rready = csru_issue;
 
         storebuf_wvalid = memu_rvalid && inst_is_store(memu_rdata.ctrl) && storebuf_wready && !memu_active_valid
-            && !memu_operand_pending && !branch_redirect && !csr_redirect;
+            && !memu_operand_pending && !backend_redirect;
 
         memu_write_valid = memu_complete && memu_exec_entry.ctrl.is_load && memu_exec_entry.bits[11:7] != 0;
         memu_write_addr  = memu_exec_entry.rd_preg;
@@ -883,6 +885,7 @@ module core (
         if_reset {
             redirect_pending    = 0;
             redirect_is_branch  = 0;
+            redirect_is_jalr    = 0;
             redirect_is_csr     = 0;
             redirect_is_fence_i = 0;
             redirect_pc         = 0;
@@ -891,12 +894,14 @@ module core (
         } else {
             redirect_pending    = 0;
             redirect_is_branch  = 0;
+            redirect_is_jalr    = 0;
             redirect_is_csr     = 0;
             redirect_is_fence_i = 0;
 
             if alu_complete && alu_mispredict {
                 redirect_pending   = 1;
                 redirect_is_branch = alu_is_br;
+                redirect_is_jalr   = alu_is_jalr;
                 redirect_pc        = alu_recovery_pc;
                 redirect_tag       = alu_rdata.rob_tag;
                 redirect_head_tag  = rob_head_tag;
@@ -920,11 +925,12 @@ module core (
         // alu_redirectは当cycleの実行結果、他のredirectは次cycleの処理要求。
         alu_redirect    = alu_complete && alu_mispredict;
         branch_redirect = redirect_pending && redirect_is_branch;
+        jalr_redirect   = redirect_pending && redirect_is_jalr;
         csr_redirect    = redirect_pending && redirect_is_csr;
         fencei_redirect = redirect_pending && redirect_is_fence_i;
 
         control_hazard         = redirect_pending;
-        backend_redirect       = branch_redirect || csr_redirect;
+        backend_redirect       = branch_redirect || jalr_redirect || csr_redirect;
         control_hazard_pc_next = redirect_pc;
     }
 
@@ -943,9 +949,9 @@ module core (
         if_reset {
             branch_pending = 0;
             branch_rob_tag = 0;
-        } else if alu_complete && alu_is_br {
+        } else if alu_complete && (alu_is_br || alu_is_jalr) {
             branch_pending = 0;
-        } else if ids_fire && inst_is_br(ids_ctrl) {
+        } else if ids_fire && (inst_is_br(ids_ctrl) || ids_is_jalr) {
             branch_pending = 1;
             branch_rob_tag = rob_allocate_tag;
         }
@@ -967,9 +973,9 @@ module core (
             serial_pending = 0;
         } else if control_hazard {
             serial_pending = 0;
-        } else if alu_complete && (alu_is_jalr || alu_is_fence_i) || csru_complete {
+        } else if (alu_complete && alu_is_fence_i) || csru_complete {
             serial_pending = 0;
-        } else if ids_fire && (ids_is_jalr || ids_ctrl.is_csr || ids_is_fence_i) {
+        } else if ids_fire && (ids_ctrl.is_csr || ids_is_fence_i) {
             serial_pending = 1;
         }
     }
@@ -984,7 +990,7 @@ module core (
 
         storebuf_commit_valid = rob_commit_valid && inst_is_store(rob_commit_data.ctrl) && storebuf_head_valid
             && storebuf_head_tag == rob_head_tag && !storebuf_commit_busy && !rob_rollback_busy && !memu_grant
-            && !branch_redirect && !csr_redirect;
+            && !backend_redirect;
 
         flist_wvalid = rollback_reg_fire || rob_commit_fire;
         flist_wdata  = if rollback_reg_fire ? rob_rollback_data.rd_preg : rob_commit_data.old_preg;
@@ -1103,9 +1109,9 @@ module core (
         rst                ,
         flush: csr_redirect,
 
-        squash     : branch_redirect  ,
-        squash_head: redirect_head_tag,
-        squash_tag : redirect_tag     ,
+        squash     : branch_redirect || jalr_redirect,
+        squash_head: redirect_head_tag               ,
+        squash_tag : redirect_tag                    ,
 
         wvalid   : alu_wvalid   ,
         wready   : alu_wready   ,
@@ -1132,9 +1138,9 @@ module core (
         rst                ,
         flush: csr_redirect,
 
-        squash     : branch_redirect  ,
-        squash_head: redirect_head_tag,
-        squash_tag : redirect_tag     ,
+        squash     : branch_redirect || jalr_redirect,
+        squash_head: redirect_head_tag               ,
+        squash_tag : redirect_tag                    ,
 
         wready: memu_wready,
         wvalid: memu_wvalid,
@@ -1165,9 +1171,9 @@ module core (
         rst                ,
         flush: csr_redirect,
 
-        squash     : branch_redirect  ,
-        squash_head: redirect_head_tag,
-        squash_tag : redirect_tag     ,
+        squash     : branch_redirect || jalr_redirect,
+        squash_head: redirect_head_tag               ,
+        squash_tag : redirect_tag                    ,
 
         wvalid  : storebuf_wvalid,
         wready  : storebuf_wready,
@@ -1197,9 +1203,9 @@ module core (
         rst                ,
         flush: csr_redirect,
 
-        squash     : branch_redirect  ,
-        squash_head: redirect_head_tag,
-        squash_tag : redirect_tag     ,
+        squash     : branch_redirect || jalr_redirect,
+        squash_head: redirect_head_tag               ,
+        squash_tag : redirect_tag                    ,
 
         wvalid   : mdu_wvalid   ,
         wready   : mdu_wready   ,
@@ -1246,12 +1252,12 @@ module core (
         // トラップはROB先頭でのみ受理するため、ここで全破棄できる
         flush: csr_redirect,
 
-        rollback_start: branch_redirect   ,
-        rollback_tag  : redirect_tag      ,
-        rollback_valid: rob_rollback_valid,
-        rollback_ready: rob_rollback_ready,
-        rollback_data : rob_rollback_data ,
-        rollback_busy : rob_rollback_busy ,
+        rollback_start: branch_redirect || jalr_redirect,
+        rollback_tag  : redirect_tag                    ,
+        rollback_valid: rob_rollback_valid              ,
+        rollback_ready: rob_rollback_ready              ,
+        rollback_data : rob_rollback_data               ,
+        rollback_busy : rob_rollback_busy               ,
 
         allocate_valid: rob_allocate_valid,
         allocate_ready: rob_allocate_ready,
