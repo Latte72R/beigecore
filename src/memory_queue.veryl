@@ -35,95 +35,83 @@ module memory_queue (
     rvalid: output logic   ,
     rdata : output euq_type,
 ) {
-    // An 8-slot ring FIFO has the same 7-entry effective capacity.
+    // 8-slot ring FIFO. 1 slot is left unused so count can distinguish
+    // empty and full without adding another count bit.
     struct memory_entry_type {
         data     : euq_type,
         rs1_ready: logic   ,
         rs2_ready: logic   ,
     }
 
-    var entries     : memory_entry_type    [7];
-    var entries_next: memory_entry_type    [7];
+    var entries     : memory_entry_type    [8];
+    var entries_next: memory_entry_type    [8];
     var count       : logic            <3>    ;
     var count_next  : logic            <3>    ;
+    var head_ptr    : logic            <3>    ;
+    var head_next   : logic            <3>    ;
+    var tail_ptr    : logic            <3>    ;
+    var tail_next   : logic            <3>    ;
     var keep_count  : logic            <3>    ;
-
-    var selected_valid: logic   ;
-    var selected_index: logic<3>;
 
     // この段階ではMemory Queue内の順序をFIFOで保つ。
     // ROB head制約は外すが、Load/Storeのメモリ順序は後でdisambiguationを
     // 追加するまで崩さない。
-    let head_ready: logic = count != 0 && entries[0].rs1_ready && entries[0].rs2_ready;
+    let head_ready       : logic = count != 0 && entries[head_ptr].rs1_ready && entries[head_ptr].rs2_ready;
+    let lock_matches_head: logic = !lock_valid || (count != 0 && entries[head_ptr].data.rob_tag == lock_tag);
 
     always_comb {
-        selected_valid = 0;
-        selected_index = 0;
-        if lock_valid {
-            for i in 0..7 {
-                if i <: count && entries[i].data.rob_tag == lock_tag {
-                    selected_valid = 1;
-                    selected_index = i as 3;
-                }
-            }
-        } else {
-            selected_valid = head_ready;
-        }
-
-        rvalid = selected_valid;
-        rdata  = entries[selected_index].data;
+        // MEMUが処理中ならready状態に関係なく同じheadを保持する。
+        rvalid = count != 0 && lock_matches_head && (lock_valid || head_ready);
+        rdata  = entries[head_ptr].data;
         wready = count != 7;
     }
 
     always_comb {
         entries_next = entries;
         count_next   = count;
+        head_next    = head_ptr;
+        tail_next    = tail_ptr;
+        keep_count   = 0;
 
-        for i in 0..7 {
-            if (wakeup0_valid && entries[i].data.rs1_preg == wakeup0_preg)
-                || (wakeup1_valid && entries[i].data.rs1_preg == wakeup1_preg)
-                || (wakeup2_valid && entries[i].data.rs1_preg == wakeup2_preg)
-                || (wakeup3_valid && entries[i].data.rs1_preg == wakeup3_preg) {
-                entries_next[i].rs1_ready = 1;
+        // Wakeupは各entryのready bitだけを更新する。通常のpopでは
+        // エントリを移動しないので、410-bitデータの前詰めが発生しない。
+        for i in 0..8 {
+            if i <: count
+                && ((wakeup0_valid && entries[head_ptr + i as 3].data.rs1_preg == wakeup0_preg)
+                    || (wakeup1_valid && entries[head_ptr + i as 3].data.rs1_preg == wakeup1_preg)
+                    || (wakeup2_valid && entries[head_ptr + i as 3].data.rs1_preg == wakeup2_preg)
+                    || (wakeup3_valid && entries[head_ptr + i as 3].data.rs1_preg == wakeup3_preg)) {
+                entries_next[head_ptr + i as 3].rs1_ready = 1;
             }
-            if (wakeup0_valid && entries[i].data.rs2_preg == wakeup0_preg)
-                || (wakeup1_valid && entries[i].data.rs2_preg == wakeup1_preg)
-                || (wakeup2_valid && entries[i].data.rs2_preg == wakeup2_preg)
-                || (wakeup3_valid && entries[i].data.rs2_preg == wakeup3_preg) {
-                entries_next[i].rs2_ready = 1;
+            if i <: count
+                && ((wakeup0_valid && entries[head_ptr + i as 3].data.rs2_preg == wakeup0_preg)
+                    || (wakeup1_valid && entries[head_ptr + i as 3].data.rs2_preg == wakeup1_preg)
+                    || (wakeup2_valid && entries[head_ptr + i as 3].data.rs2_preg == wakeup2_preg)
+                    || (wakeup3_valid && entries[head_ptr + i as 3].data.rs2_preg == wakeup3_preg)) {
+                entries_next[head_ptr + i as 3].rs2_ready = 1;
             }
         }
 
         if rvalid && rready {
-            for i in 0..6 {
-                if i >= selected_index {
-                    entries_next[i] = entries_next[i + 1];
-                }
-            }
-            entries_next[6] =  '0;
-            count_next      -= 1;
+            head_next  += 1;
+            count_next -= 1;
         }
 
         if wvalid && wready {
-            entries_next[count_next].data      =  wdata;
-            entries_next[count_next].rs1_ready =  wrs1ready;
-            entries_next[count_next].rs2_ready =  wrs2ready;
-            count_next                         += 1;
+            tail_next  += 1;
+            count_next += 1;
         }
 
         // Younger entries are a suffix because insertion is in program order.
-        keep_count = 0;
+        // Ring FIFOでは、保持するprefixの長さからtailだけを再設定する。
         if squash {
-            for i in 0..7 {
-                if i <: count_next && !((entries_next[i].data.rob_tag - squash_head) >: (squash_tag - squash_head)) {
+            for i in 0..8 {
+                if i <: count_next
+                    && !((entries_next[head_next + i as 3].data.rob_tag - squash_head) >: (squash_tag - squash_head)) {
                     keep_count += 1;
                 }
             }
-            for i in 0..7 {
-                if i >: keep_count {
-                    entries_next[i] = '0;
-                }
-            }
+            tail_next  = head_next + keep_count;
             count_next = keep_count;
         }
     }
@@ -131,18 +119,29 @@ module memory_queue (
     #[allow(missing_reset_statement)]
     always_ff {
         if_reset {
-            count = 0;
-            for i in 0..7 {
+            count    = 0;
+            head_ptr = 0;
+            tail_ptr = 0;
+            for i in 0..8 {
                 entries[i] = '0;
             }
         } else if flush {
-            count = 0;
-            for i in 0..7 {
+            count    = 0;
+            head_ptr = 0;
+            tail_ptr = 0;
+            for i in 0..8 {
                 entries[i] = '0;
             }
         } else {
             entries = entries_next;
-            count   = count_next;
+            if wvalid && wready {
+                entries[tail_ptr].data      = wdata;
+                entries[tail_ptr].rs1_ready = wrs1ready;
+                entries[tail_ptr].rs2_ready = wrs2ready;
+            }
+            count    = count_next;
+            head_ptr = head_next;
+            tail_ptr = tail_next;
         }
     }
 

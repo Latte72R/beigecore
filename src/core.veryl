@@ -47,6 +47,16 @@ module core (
     var branch_redirect       : logic;
     var csr_redirect          : logic;
 
+    // Redirectは実行結果のcycleから1cycle遅らせてfrontend/backendへ伝える。
+    // ALUの分岐判定からdispatch queueの更新までを同一組合せ経路にしないため。
+    var redirect_pending   : logic ;
+    var redirect_is_branch : logic ;
+    var redirect_is_csr    : logic ;
+    var redirect_is_fence_i: logic ;
+    var redirect_pc        : Addr  ;
+    var redirect_tag       : RobTag;
+    var redirect_head_tag  : RobTag;
+
     var prediction_redirect: logic;
     var ids_imm            : UIntX;
     var ids_pred_target    : Addr ;
@@ -58,8 +68,6 @@ module core (
 
         if control_hazard {
             i_membus.next_pc = control_hazard_pc_next;
-        } else if fencei_redirect {
-            i_membus.next_pc = alu_next_pc;
         } else {
             i_membus.next_pc = ids_pred_target;
         }
@@ -216,20 +224,37 @@ module core (
     var memu_grant   : logic   ;
     var memu_complete: logic   ;
 
-    var memu_start           : logic   ;
-    var memu_kill            : logic   ;
-    var memu_drop_done       : logic   ;
-    var memu_active_valid    : logic   ;
-    var memu_killed          : logic   ;
-    var memu_active_entry    : euq_type;
-    var memu_exec_entry      : euq_type;
-    var memu_wrs1ready       : logic   ;
-    var memu_wrs2ready       : logic   ;
-    var memu_load_addr       : Addr    ;
-    var memu_load_blocked    : logic   ;
-    var memu_forward_valid   : logic   ;
-    var memu_forward_data    : UIntX   ;
-    var memu_forward_complete: logic   ;
+    var memu_start                : logic   ;
+    var memu_kill                 : logic   ;
+    var memu_drop_done            : logic   ;
+    var memu_active_valid         : logic   ;
+    var memu_killed               : logic   ;
+    var memu_active_entry         : euq_type;
+    var memu_exec_entry           : euq_type;
+    var memu_wrs1ready            : logic   ;
+    var memu_wrs2ready            : logic   ;
+    var memu_load_addr            : Addr    ;
+    var memu_load_blocked         : logic   ;
+    var memu_forward_valid        : logic   ;
+    var memu_forward_data         : UIntX   ;
+    var storebuf_load_blocked     : logic   ;
+    var storebuf_forward_valid    : logic   ;
+    var storebuf_forward_data     : UIntX   ;
+    var memu_operand_pending      : logic   ;
+    var memu_operand_entry        : euq_type;
+    var memu_operand_rs1_data     : UIntX   ;
+    var memu_operand_rs2_data     : UIntX   ;
+    var memu_operand_addr         : Addr    ;
+    var memu_operand_blocked      : logic   ;
+    var memu_operand_forward_valid: logic   ;
+    var memu_operand_forward_data : UIntX   ;
+    var memu_operand_capture      : logic   ;
+    var memu_operand_kill         : logic   ;
+    var memu_exec_rs1_data        : UIntX   ;
+    var memu_exec_rs2_data        : UIntX   ;
+    var memu_forward_complete     : logic   ;
+
+    let memu_operand_recheck: logic = memu_operand_pending && memu_operand_blocked && !control_hazard;
 
     var storebuf_wready      : logic ;
     var storebuf_wvalid      : logic ;
@@ -476,7 +501,6 @@ module core (
 
     let alu_is_fence_i: logic = alu_rdata.bits[6:0] == OP_MISC_MEM && alu_rdata.bits[14:12] == 3'b001;
     let alu_at_head   : logic = rob_head_valid && rob_head_tag == alu_rdata.rob_tag;
-    assign fencei_redirect = alu_complete && alu_is_fence_i;
 
     var alu_result: UIntX;
     inst alu_alu: alu (
@@ -499,6 +523,12 @@ module core (
         op2   : alu_op2              ,
         take  : alu_br_take          ,
     );
+
+    let alu_recovery_pc: Addr = switch {
+        alu_is_jalr: alu_jalr_target,
+        alu_br_take: alu_rdata.addr + alu_rdata.imm,
+        default    : alu_rdata.addr + (if alu_rdata.ctrl.is_rvc ? 2 : 4),
+    };
 
     let alu_mispredict: logic = alu_rvalid
         && ((alu_is_br && alu_rdata.pred_taken != alu_br_take)
@@ -569,20 +599,28 @@ module core (
     var memu_stall : logic;
 
     always_comb {
-        memu_exec_entry = if memu_active_valid ? memu_active_entry : memu_rdata;
-        memu_load_addr  = memu_read1_data + memu_rdata.imm;
+        memu_exec_entry    = if memu_active_valid ?
+            memu_active_entry
+        : if memu_operand_pending ?
+            memu_operand_entry
+        :
+            memu_rdata
+        ;
+        memu_exec_rs1_data = if memu_active_valid || memu_operand_pending ? memu_operand_rs1_data : memu_read1_data;
+        memu_exec_rs2_data = if memu_active_valid || memu_operand_pending ? memu_operand_rs2_data : memu_read2_data;
+        memu_load_addr     = memu_operand_addr;
     }
 
     inst memu: memunit (
-        clk   : clk                                  ,
-        rst   : rst                                  ,
-        valid : memu_grant                           ,
-        ctrl  : memu_exec_entry.ctrl                 ,
-        addr  : memu_read1_data + memu_exec_entry.imm,
-        rs2   : memu_read2_data                      ,
-        rdata : memu_result                          ,
-        stall : memu_stall                           ,
-        membus: memu_bus                             ,
+        clk   : clk                                     ,
+        rst   : rst                                     ,
+        valid : memu_grant                              ,
+        ctrl  : memu_exec_entry.ctrl                    ,
+        addr  : memu_exec_rs1_data + memu_exec_entry.imm,
+        rs2   : memu_exec_rs2_data                      ,
+        rdata : memu_result                             ,
+        stall : memu_stall                              ,
+        membus: memu_bus                                ,
     );
 
     always_ff {
@@ -594,7 +632,7 @@ module core (
             if memu_start && !memu_forward_valid {
                 memu_active_valid = 1;
                 memu_killed       = 0;
-                memu_active_entry = memu_rdata;
+                memu_active_entry = memu_operand_entry;
             }
             if memu_kill {
                 memu_killed = 1;
@@ -602,6 +640,39 @@ module core (
             if memu_complete || memu_drop_done {
                 memu_active_valid = 0;
                 memu_killed       = 0;
+            }
+        }
+    }
+
+    always_ff {
+        if_reset {
+            memu_operand_pending       = 0;
+            memu_operand_entry         = '0;
+            memu_operand_rs1_data      = 0;
+            memu_operand_rs2_data      = 0;
+            memu_operand_addr          = 0;
+            memu_operand_blocked       = 0;
+            memu_operand_forward_valid = 0;
+            memu_operand_forward_data  = 0;
+        } else if csr_redirect {
+            memu_operand_pending = 0;
+        } else {
+            if memu_operand_capture {
+                memu_operand_pending       = 1;
+                memu_operand_entry         = memu_rdata;
+                memu_operand_rs1_data      = memu_read1_data;
+                memu_operand_rs2_data      = memu_read2_data;
+                memu_operand_addr          = memu_read1_data + memu_rdata.imm;
+                memu_operand_blocked       = storebuf_load_blocked;
+                memu_operand_forward_valid = storebuf_forward_valid;
+                memu_operand_forward_data  = storebuf_forward_data;
+            } else if memu_operand_recheck {
+                memu_operand_blocked       = storebuf_load_blocked;
+                memu_operand_forward_valid = storebuf_forward_valid;
+                memu_operand_forward_data  = storebuf_forward_data;
+            }
+            if memu_operand_kill || memu_start || storebuf_wvalid {
+                memu_operand_pending = 0;
             }
         }
     }
@@ -697,33 +768,38 @@ module core (
 
     let csru_sources_ready: logic = (!csru_rdata.uses_rs1 || !prf_busy[csru_rdata.rs1_preg])
         && (!csru_rdata.uses_rs2 || !prf_busy[csru_rdata.rs2_preg]);
-    let memu_sources_ready: logic = (!memu_rdata.uses_rs1 || !prf_busy[memu_rdata.rs1_preg])
-        && (!memu_rdata.uses_rs2 || !prf_busy[memu_rdata.rs2_preg]);
 
     always_comb {
+        memu_load_blocked  = memu_operand_pending && memu_operand_blocked;
+        memu_forward_valid = memu_operand_pending && memu_operand_forward_valid;
+        memu_forward_data  = memu_operand_forward_data;
+
         // LoadはStoreより前にある範囲で、最古のready命令を実行する。
-        memu_start = memu_rvalid && memu_rdata.ctrl.is_load
-            && memu_sources_ready
-            // older Storeと重複する場合だけ待ち、非重複Storeは追い越す。
-             && !memu_load_blocked && !memu_active_valid && !storebuf_commit_busy && !branch_redirect && !csr_redirect;
+        memu_operand_capture = memu_rvalid && memu_rdata.ctrl.is_load && !memu_active_valid && !memu_operand_pending
+            && !storebuf_commit_busy && !control_hazard;
+        memu_start           = memu_operand_pending && memu_operand_entry.ctrl.is_load && !memu_load_blocked
+            && !memu_active_valid && !storebuf_commit_busy && !branch_redirect && !csr_redirect;
         // 完全にStore Bufferから転送できるLoadはmemunitを起動しない。
-        memu_grant     = memu_active_valid || (memu_start && !memu_forward_valid);
-        memu_kill      = csr_redirect
-            || (branch_redirect && memu_active_valid && (memu_active_entry.rob_tag - rob_head_tag)
-                >: (alu_rdata.rob_tag - rob_head_tag));
-        memu_drop_done = memu_active_valid && memu_killed && !memu_stall;
+        memu_grant        = memu_active_valid || (memu_start && !memu_forward_valid);
+        memu_kill         = csr_redirect
+            || (branch_redirect && memu_active_valid && (memu_active_entry.rob_tag - redirect_head_tag)
+                >: (redirect_tag - redirect_head_tag));
+        memu_operand_kill = csr_redirect
+            || (branch_redirect && memu_operand_pending && (memu_operand_entry.rob_tag - redirect_head_tag)
+                >: (redirect_tag - redirect_head_tag));
+        memu_drop_done    = memu_active_valid && memu_killed && !memu_stall;
         // MDUはMDUがidleなら実行開始・継続
         // 分岐回復と同じcycleに発行すると、queueから消えたyoung命令が
         // MDUへ入ってしまうため、回復完了後のcycleで再発行する。
         mdu_grant = mdu_rvalid && mdu_ready && !mdu_busy && !branch_redirect && !csr_redirect;
         mdu_kill  = csr_redirect
-            || (branch_redirect && mdu_busy && (mdu_active_entry.rob_tag - rob_head_tag)
-                >: (alu_rdata.rob_tag - rob_head_tag));
+            || (branch_redirect && mdu_busy && (mdu_active_entry.rob_tag - redirect_head_tag)
+                >: (redirect_tag - redirect_head_tag));
         // CSRはROB先頭かつoperand readyなら実行
-        csru_issue = csru_at_head && csru_sources_ready && !csru_active_valid;
-        csru_grant = csru_active_valid;
+        csru_issue = csru_at_head && csru_sources_ready && !csru_active_valid && !control_hazard;
+        csru_grant = csru_active_valid && !control_hazard;
         // ALUは(fence_iでないまたはROB先頭)かつoperand readyなら実行開始・継続
-        alu_grant = alu_rvalid && (!alu_is_fence_i || alu_at_head);
+        alu_grant = alu_rvalid && (!alu_is_fence_i || alu_at_head) && !control_hazard;
     }
 
     always_comb {
@@ -744,8 +820,8 @@ module core (
         memu_rready = memu_complete || memu_drop_done;
         csru_rready = csru_issue;
 
-        storebuf_wvalid = memu_rvalid && inst_is_store(memu_rdata.ctrl) && memu_sources_ready && storebuf_wready
-            && !memu_active_valid && !branch_redirect && !csr_redirect;
+        storebuf_wvalid = memu_rvalid && inst_is_store(memu_rdata.ctrl) && storebuf_wready && !memu_active_valid
+            && !memu_operand_pending && !branch_redirect && !csr_redirect;
 
         memu_write_valid = memu_complete && memu_exec_entry.ctrl.is_load && memu_exec_entry.bits[11:7] != 0;
         memu_write_addr  = memu_exec_entry.rd_preg;
@@ -800,20 +876,55 @@ module core (
         csru_complete_data.raise_trap = csru_raise_trap && !csru_trap_return;
     }
 
+    // 実行結果をラッチし、次cycleにfrontend redirect/backend recoveryを行う。
+    // これにより、分岐のALU結果が同じcycleのdispatch queue更新まで伝播しない。
+    always_ff {
+        if_reset {
+            redirect_pending    = 0;
+            redirect_is_branch  = 0;
+            redirect_is_csr     = 0;
+            redirect_is_fence_i = 0;
+            redirect_pc         = 0;
+            redirect_tag        = 0;
+            redirect_head_tag   = 0;
+        } else {
+            redirect_pending    = 0;
+            redirect_is_branch  = 0;
+            redirect_is_csr     = 0;
+            redirect_is_fence_i = 0;
+
+            if alu_complete && alu_mispredict {
+                redirect_pending   = 1;
+                redirect_is_branch = alu_is_br;
+                redirect_pc        = alu_recovery_pc;
+                redirect_tag       = alu_rdata.rob_tag;
+                redirect_head_tag  = rob_head_tag;
+            } else if csru_complete && csru_raise_trap {
+                redirect_pending  = 1;
+                redirect_is_csr   = 1;
+                redirect_pc       = csru_trap_vector;
+                redirect_tag      = rob_head_tag;
+                redirect_head_tag = rob_head_tag;
+            } else if alu_complete && alu_is_fence_i {
+                redirect_pending    = 1;
+                redirect_is_fence_i = 1;
+                redirect_pc         = alu_next_pc;
+                redirect_tag        = alu_rdata.rob_tag;
+                redirect_head_tag   = rob_head_tag;
+            }
+        }
+    }
+
     always_comb {
+        // alu_redirectは当cycleの実行結果、他のredirectは次cycleの処理要求。
         alu_redirect    = alu_complete && alu_mispredict;
-        branch_redirect = alu_redirect && alu_is_br;
-        csr_redirect    = csru_complete && csru_raise_trap;
+        branch_redirect = redirect_pending && redirect_is_branch;
+        csr_redirect    = redirect_pending && redirect_is_csr;
+        fencei_redirect = redirect_pending && redirect_is_fence_i;
 
-        control_hazard   = alu_redirect || csr_redirect;
-        backend_redirect = branch_redirect || csr_redirect;
-
-        let alu_recovery_pc: Addr = switch {
-            alu_is_jalr: alu_jalr_target,
-            alu_br_take: (alu_rdata.addr + alu_rdata.imm),
-            default    : (alu_rdata.addr + (if alu_rdata.ctrl.is_rvc ? 2 : 4))
-        };
-        control_hazard_pc_next = if csr_redirect ? csru_trap_vector : alu_recovery_pc;
+        control_hazard         = redirect_pending;
+        backend_redirect       = branch_redirect || csr_redirect;
+        control_hazard_pc_next = redirect_pc;
     }
 
     ///////////////////////////////// WB Stage /////////////////////////////////
@@ -992,8 +1103,8 @@ module core (
         flush: csr_redirect,
 
         squash     : branch_redirect  ,
-        squash_head: rob_head_tag     ,
-        squash_tag : alu_rdata.rob_tag,
+        squash_head: redirect_head_tag,
+        squash_tag : redirect_tag     ,
 
         wvalid   : alu_wvalid   ,
         wready   : alu_wready   ,
@@ -1021,8 +1132,8 @@ module core (
         flush: csr_redirect,
 
         squash     : branch_redirect  ,
-        squash_head: rob_head_tag     ,
-        squash_tag : alu_rdata.rob_tag,
+        squash_head: redirect_head_tag,
+        squash_tag : redirect_tag     ,
 
         wready: memu_wready,
         wvalid: memu_wvalid,
@@ -1054,8 +1165,8 @@ module core (
         flush: csr_redirect,
 
         squash     : branch_redirect  ,
-        squash_head: rob_head_tag     ,
-        squash_tag : alu_rdata.rob_tag,
+        squash_head: redirect_head_tag,
+        squash_tag : redirect_tag     ,
 
         wvalid  : storebuf_wvalid,
         wready  : storebuf_wready,
@@ -1063,12 +1174,12 @@ module core (
         rs1_data: memu_read1_data,
         rs2_data: memu_read2_data,
 
-        load_check_valid  : memu_rvalid && memu_rdata.ctrl.is_load && memu_sources_ready && !memu_active_valid,
-        load_addr         : memu_load_addr                                                                    ,
-        load_funct3       : memu_rdata.ctrl.funct3                                                            ,
-        load_blocked      : memu_load_blocked                                                                 ,
-        load_forward_valid: memu_forward_valid                                                                ,
-        load_forward_data : memu_forward_data                                                                 ,
+        load_check_valid  : memu_operand_capture || memu_operand_recheck,
+        load_addr         : if memu_operand_recheck ? memu_load_addr : memu_read1_data + memu_rdata.imm,
+        load_funct3       : if memu_operand_recheck ? memu_operand_entry.ctrl.funct3 : memu_rdata.ctrl.funct3,
+        load_blocked      : storebuf_load_blocked                                                            ,
+        load_forward_valid: storebuf_forward_valid                                                           ,
+        load_forward_data : storebuf_forward_data                                                            ,
 
         commit_valid: storebuf_commit_valid,
         commit_allow: !rob_rollback_busy   ,
@@ -1086,8 +1197,8 @@ module core (
         flush: csr_redirect,
 
         squash     : branch_redirect  ,
-        squash_head: rob_head_tag     ,
-        squash_tag : alu_rdata.rob_tag,
+        squash_head: redirect_head_tag,
+        squash_tag : redirect_tag     ,
 
         wvalid   : mdu_wvalid   ,
         wready   : mdu_wready   ,
@@ -1135,7 +1246,7 @@ module core (
         flush: csr_redirect,
 
         rollback_start: branch_redirect   ,
-        rollback_tag  : alu_rdata.rob_tag ,
+        rollback_tag  : redirect_tag      ,
         rollback_valid: rob_rollback_valid,
         rollback_ready: rob_rollback_ready,
         rollback_data : rob_rollback_data ,
