@@ -336,8 +336,8 @@ module core (
         inst_is_memop(ids_ctrl): memu_wready,
         ids_is_muldiv          : mdu_wready,
         ids_is_csr             : csru_wready,
-        ids_is_alu              : alu_wready,
-        default                 : 1,
+        ids_is_alu             : alu_wready,
+        default                : 1,
     };
     let ids_is_control: logic = ids_is_jalr || inst_is_br(ids_ctrl) || ids_ctrl.is_csr || ids_is_fence_i;
 
@@ -447,10 +447,14 @@ module core (
     ///////////////////////////////// EX Stage /////////////////////////////////
 
     always_comb {
+        // 実行中/pendingのoperand値は専用レジスタに保持しているため、
+        // PRFのread addressは常にqueue headから生成する。
+        // active/pending/currentの選択をここで行うと、不要な410-bit entry
+        // muxがPRF read経路に入り、MEMUのクリティカルパスを延ばす。
+        memu_read1_addr = memu_rdata.rs1_preg;
+        memu_read2_addr = memu_rdata.rs2_preg;
         alu_read1_addr  = alu_rdata.rs1_preg;
         alu_read2_addr  = alu_rdata.rs2_preg;
-        memu_read1_addr = memu_exec_entry.rs1_preg;
-        memu_read2_addr = memu_exec_entry.rs2_preg;
         mdu_read1_addr  = mdu_rdata.rs1_preg;
         mdu_read2_addr  = mdu_rdata.rs2_preg;
         csru_read_addr  = csru_active_entry.rs1_preg;
