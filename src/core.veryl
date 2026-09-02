@@ -333,12 +333,11 @@ module core (
     var serial_pending: logic;
 
     let ids_target_ready: logic = switch {
-        ids_is_alu   : alu_wready,
-        ids_is_load  : memu_wready,
-        ids_is_store : memu_wready,
-        ids_is_muldiv: mdu_wready,
-        ids_is_csr   : csru_wready,
-        default      : 1,
+        inst_is_memop(ids_ctrl): memu_wready,
+        ids_is_muldiv          : mdu_wready,
+        ids_is_csr             : csru_wready,
+        ids_is_alu              : alu_wready,
+        default                 : 1,
     };
     let ids_is_control: logic = ids_is_jalr || inst_is_br(ids_ctrl) || ids_ctrl.is_csr || ids_is_fence_i;
 
