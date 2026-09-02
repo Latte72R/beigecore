@@ -46,9 +46,12 @@ module issue_queue (
     var count       : logic           <3>    ;
     var count_next  : logic           <3>    ;
 
-    var selected_valid: logic   ;
-    var selected_index: logic<2>;
-    var keep_count    : logic<3>;
+    var selected_valid: logic       ;
+    var selected_index: logic<2>    ;
+    var keep_count    : logic<3>    ;
+    var squash_keep   : logic    [4];
+    var squash_sum1   : logic<2> [2];
+    var squash_sum2   : logic<3>    ;
 
     let ready0: logic = entries[0].valid && entries[0].rs1_ready && entries[0].rs2_ready;
     let ready1: logic = entries[1].valid && entries[1].rs1_ready && entries[1].rs2_ready;
@@ -82,6 +85,13 @@ module issue_queue (
         count_next   = count;
         entries_next = entries;
         keep_count   = 0;
+        for i in 0..4 {
+            squash_keep[i] = 0;
+        }
+        for i in 0..2 {
+            squash_sum1[i] = 0;
+        }
+        squash_sum2 = 0;
 
         for i in 0..4 {
             if (wakeup0_valid && entries[i].data.rs1_preg == wakeup0_preg)
@@ -124,14 +134,17 @@ module issue_queue (
         // the resolving branch form one suffix.  Keep only the older prefix.
         if squash {
             for i in 0..4 {
-                if entries_next[i].valid
-                    && !((entries_next[i].data.rob_tag - squash_head) >: (squash_tag - squash_head)) {
-                    keep_count += 1;
-                } else {
+                squash_keep[i] = entries_next[i].valid
+                    && !((entries_next[i].data.rob_tag - squash_head) >: (squash_tag - squash_head));
+                if !squash_keep[i] {
                     entries_next[i].valid = 0;
                 }
             }
-            count_next = keep_count;
+            squash_sum1[0] = {1'b0, squash_keep[0]} + {1'b0, squash_keep[1]};
+            squash_sum1[1] = {1'b0, squash_keep[2]} + {1'b0, squash_keep[3]};
+            squash_sum2    = {1'b0, squash_sum1[0]} + {1'b0, squash_sum1[1]};
+            keep_count     = squash_sum2;
+            count_next     = keep_count;
         }
     }
 
