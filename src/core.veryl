@@ -35,6 +35,7 @@ module core (
     var fencei_redirect       : logic;
     var backend_redirect      : logic;
     var alu_redirect          : logic;
+    var branch_redirect       : logic;
     var csr_redirect          : logic;
 
     var prediction_redirect: logic;
@@ -131,8 +132,10 @@ module core (
     var rat_write_addr : ArchReg;
     var rat_write_data : PhysReg;
 
-    var rat_flush        : logic;
-    var branch_checkpoint: logic;
+    var rat_flush        : logic ;
+    var branch_checkpoint: logic ;
+    var branch_pending   : logic ;
+    var branch_rob_tag   : RobTag;
 
     let ids_new_preg: PhysReg = flist_rdata;
     let ids_old_preg: PhysReg = rat_write_old;
@@ -237,7 +240,7 @@ module core (
                 prf_busy[i]            = 0;
                 prf_busy_checkpoint[i] = 0;
             }
-        } else if alu_redirect {
+        } else if branch_redirect {
             for i in 0..PREG_COUNT {
                 prf_busy[i] = prf_busy_checkpoint[i];
             }
@@ -250,15 +253,33 @@ module core (
             // 実行完了を先に反映
             if alu_write_valid {
                 prf_busy[alu_write_addr] = 0;
+                if branch_checkpoint
+                    || (branch_pending && (alu_rdata.rob_tag - rob_head_tag) <: (branch_rob_tag - rob_head_tag)) {
+                    prf_busy_checkpoint[alu_write_addr] = 0;
+                }
             }
             if memu_write_valid {
                 prf_busy[memu_write_addr] = 0;
+                if branch_checkpoint
+                    || (branch_pending && (memu_rdata.rob_tag - rob_head_tag) <: (branch_rob_tag - rob_head_tag)) {
+                    prf_busy_checkpoint[memu_write_addr] = 0;
+                }
             }
             if mdu_write_valid {
                 prf_busy[mdu_write_addr] = 0;
+                if branch_checkpoint
+                    || (branch_pending && (mdu_active_entry.rob_tag - rob_head_tag)
+                        <: (branch_rob_tag - rob_head_tag)) {
+                    prf_busy_checkpoint[mdu_write_addr] = 0;
+                }
             }
             if csru_write_valid {
                 prf_busy[csru_write_addr] = 0;
+                if branch_checkpoint
+                    || (branch_pending && (csru_active_entry.rob_tag - rob_head_tag)
+                        <: (branch_rob_tag - rob_head_tag)) {
+                    prf_busy_checkpoint[csru_write_addr] = 0;
+                }
             }
 
             // 新規割当
@@ -280,7 +301,6 @@ module core (
 
     // 未解決の直列化命令がROB/MEM内にある
     var serial_pending: logic;
-    var branch_pending: logic;
 
     let ids_target_ready: logic = switch {
         ids_is_alu   : alu_wready,
@@ -290,12 +310,11 @@ module core (
         ids_is_csr   : csru_wready,
         default      : 1,
     };
-    let ids_is_control     : logic = ids_is_jalr || inst_is_br(ids_ctrl) || ids_ctrl.is_csr || ids_is_fence_i;
-    let branch_can_dispatch: logic = !inst_is_br(ids_ctrl) || !rob_head_valid;
+    let ids_is_control: logic = ids_is_jalr || inst_is_br(ids_ctrl) || ids_ctrl.is_csr || ids_is_fence_i;
 
     always_comb {
-        i_membus.rready = !serial_pending && !(branch_pending && ids_is_control) && branch_can_dispatch
-            && rob_allocate_ready && ids_target_ready && ids_preg_ready;
+        i_membus.rready = !serial_pending && !(branch_pending && ids_is_control) && rob_allocate_ready
+            && ids_target_ready && ids_preg_ready;
     }
 
     always_comb {
@@ -633,7 +652,7 @@ module core (
         csru_issue = csru_at_head && csru_sources_ready && !csru_active_valid;
         csru_grant = csru_active_valid;
         // ALUは(fence_iでないまたはROB先頭)かつoperand readyなら実行開始・継続
-        alu_grant = alu_rvalid && (!(alu_is_fence_i || alu_is_br) || alu_at_head);
+        alu_grant = alu_rvalid && (!alu_is_fence_i || alu_at_head);
     }
 
     always_comb {
@@ -704,11 +723,12 @@ module core (
     }
 
     always_comb {
-        alu_redirect = alu_complete && alu_mispredict;
-        csr_redirect = csru_complete && csru_raise_trap;
+        alu_redirect    = alu_complete && alu_mispredict;
+        branch_redirect = alu_redirect && alu_is_br;
+        csr_redirect    = csru_complete && csru_raise_trap;
 
         control_hazard   = alu_redirect || csr_redirect;
-        backend_redirect = alu_redirect || csr_redirect;
+        backend_redirect = branch_redirect || csr_redirect;
 
         let alu_recovery_pc: Addr = switch {
             alu_is_jalr: alu_jalr_target,
@@ -732,10 +752,12 @@ module core (
     always_ff {
         if_reset {
             branch_pending = 0;
+            branch_rob_tag = 0;
         } else if alu_complete && alu_is_br {
             branch_pending = 0;
         } else if branch_checkpoint {
             branch_pending = 1;
+            branch_rob_tag = rob_allocate_tag;
         }
     }
 
@@ -969,7 +991,7 @@ module core (
         // トラップはROB先頭でのみ受理するため、ここで全破棄できる
         flush: csr_redirect,
 
-        partial_flush    : alu_redirect     ,
+        partial_flush    : branch_redirect  ,
         partial_flush_tag: alu_rdata.rob_tag,
 
         allocate_valid: rob_allocate_valid,
@@ -1006,7 +1028,7 @@ module core (
         clk                          ,
         rst                          ,
         checkpoint: branch_checkpoint,
-        restore   : alu_redirect     ,
+        restore   : branch_redirect  ,
         rready    : flist_rready     ,
         rvalid    : flist_rvalid     ,
         rdata     : flist_rdata      ,
@@ -1020,7 +1042,7 @@ module core (
         rst                           ,
         flush      : rat_flush        ,
         checkpoint : branch_checkpoint,
-        restore    : alu_redirect     ,
+        restore    : branch_redirect  ,
         read1_addr : rat_read1_addr   ,
         read1_data : rat_read1_data   ,
         read2_addr : rat_read2_addr   ,

@@ -17,13 +17,11 @@ module free_list (
     var head           : PhysReg;
     var tail           : PhysReg;
     var checkpoint_head: PhysReg;
-    var checkpoint_tail: PhysReg;
     let full           : logic   = (tail + 1) == head;
     let pop            : logic   = rready && rvalid;
 
     #[sv("syn_ramstyle=\"registers\"")]
-    var mem           : PhysReg [PREG_COUNT];
-    var checkpoint_mem: PhysReg [PREG_COUNT];
+    var mem: PhysReg [PREG_COUNT];
 
     always_comb {
         rvalid = head != tail;
@@ -37,25 +35,15 @@ module free_list (
         if_reset {
             head            = 0;
             checkpoint_head = 0;
-            checkpoint_tail = 0;
             for i in 0..(PREG_COUNT - AREG_COUNT) {
-                mem[i]            = (AREG_COUNT + i) as PhysReg;
-                checkpoint_mem[i] = (AREG_COUNT + i) as PhysReg;
+                mem[i] = (AREG_COUNT + i) as PhysReg;
             }
             tail = (PREG_COUNT - AREG_COUNT) as PhysReg;
         } else if restore {
             head = checkpoint_head;
-            tail = checkpoint_tail;
-            for i in 0..PREG_COUNT {
-                mem[i] = checkpoint_mem[i];
-            }
         } else {
             if checkpoint {
                 checkpoint_head = head;
-                checkpoint_tail = tail;
-                for i in 0..PREG_COUNT {
-                    checkpoint_mem[i] = mem[i];
-                }
             }
             if wready && wvalid {
                 mem[tail] = wdata;
