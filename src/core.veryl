@@ -831,8 +831,9 @@ module core (
     );
 
     inst memq: fifo #(
-        DATA_TYPE: euq_type,
-        WIDTH    : 3       ,
+        DATA_TYPE    : euq_type,
+        WIDTH        : 3       ,
+        ALLOW_REPLACE: 0       ,
     ) (
         clk                     ,
         rst                     ,
