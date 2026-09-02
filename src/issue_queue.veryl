@@ -74,8 +74,9 @@ module issue_queue (
         rdata  = entries[selected_index].data;
     }
 
-    // Do not feed same-cycle issue back into frontend dispatch readiness.
-    assign wready = count != 4;
+    // When full, accept a new entry in the same cycle that the selected
+    // entry is issued, so a full queue does not create a dispatch bubble.
+    assign wready = count != 4 || (rvalid && rready);
 
     // 次状態の更新順序:
     //   1. writeback tagによるwakeup
