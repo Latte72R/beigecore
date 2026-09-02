@@ -1,6 +1,7 @@
 module fifo #(
-    param DATA_TYPE: type = logic,
-    param WIDTH    : u32  = 2    ,
+    param DATA_TYPE    : type  = logic,
+    param WIDTH        : u32   = 2    ,
+    param ALLOW_REPLACE: logic = true ,
 ) (
     clk       : input  clock        ,
     rst       : input  reset        ,
@@ -15,7 +16,7 @@ module fifo #(
 ) {
     if WIDTH == 1 :width_one {
         always_comb {
-            wready     = !rvalid || rready;
+            wready     = !rvalid || (ALLOW_REPLACE && rready);
             wready_two = 0;
         }
         always_ff {
@@ -50,7 +51,7 @@ module fifo #(
         always_comb {
             rvalid     = head != tail;
             rdata      = mem[head];
-            wready     = !full || pop; // 1要素を書き込める
+            wready     = !full || (ALLOW_REPLACE && pop); // 1要素を書き込める
             wready_two = !full && (tail_plus2 != head || pop); // 2要素を書き込める
         }
 

@@ -246,12 +246,18 @@ module core (
         }
     }
 
+    let ids_opcode       : logic<7> = ids_inst_bits[6:0];
+    let ids_pre_is_mem   : logic    = ids_opcode == OP_LOAD || ids_opcode == OP_STORE || ids_opcode == OP_AMO;
+    let ids_pre_is_muldiv: logic    = (ids_opcode == OP_OP || ids_opcode == OP_OP_32) && ids_inst_bits[31:25]
+        == 7'b0000001;
+    let ids_pre_is_csr   : logic    = ids_opcode == OP_SYSTEM;
+
     // dispatch: 命令種別に応じて該当キューに格納
-    let ids_is_alu    : logic = !inst_is_memop(ids_ctrl) && !ids_ctrl.is_muldiv && !ids_ctrl.is_csr;
+    let ids_is_csr    : logic = ids_ctrl.is_csr || ids_expt.valid;
+    let ids_is_alu    : logic = !inst_is_memop(ids_ctrl) && !ids_ctrl.is_muldiv && !ids_is_csr;
     let ids_is_load   : logic = ids_ctrl.is_load;
     let ids_is_store  : logic = inst_is_store(ids_ctrl);
     let ids_is_muldiv : logic = ids_ctrl.is_muldiv;
-    let ids_is_csr    : logic = ids_ctrl.is_csr;
     let ids_is_fence_i: logic = ids_inst_bits[6:0] == OP_MISC_MEM && ids_inst_bits[14:12] == 3'b001;
 
     var dispatch_data: euq_type;
@@ -262,12 +268,10 @@ module core (
     always_comb {
         // ID rready: 該当キューが空き + ROB 空き
         let ids_target_ready: logic = switch {
-            ids_is_alu   : alu_wready,
-            ids_is_load  : memu_wready,
-            ids_is_store : memu_wready,
-            ids_is_muldiv: mdu_wready,
-            ids_is_csr   : csru_wready,
-            default      : 1,
+            ids_pre_is_mem   : memu_wready,
+            ids_pre_is_muldiv: mdu_wready,
+            ids_pre_is_csr   : csru_wready,
+            default          : alu_wready,
         };
         i_membus.rready = !serial_pending && rob_allocate_ready && ids_target_ready && ids_preg_ready;
 
@@ -650,7 +654,7 @@ module core (
         } else if alu_complete && (alu_rdata.ctrl.is_jump || inst_is_br(alu_rdata.ctrl) || alu_is_fence_i)
             || csru_complete {
             serial_pending = 0;
-        } else if ids_fire && (ids_ctrl.is_jump || inst_is_br(ids_ctrl) || ids_ctrl.is_csr || ids_is_fence_i) {
+        } else if ids_fire && (ids_ctrl.is_jump || inst_is_br(ids_ctrl) || ids_is_csr || ids_is_fence_i) {
             serial_pending = 1;
         }
     }
@@ -781,8 +785,9 @@ module core (
     );
 
     inst memq: fifo #(
-        DATA_TYPE: euq_type,
-        WIDTH    : 3       ,
+        DATA_TYPE    : euq_type,
+        WIDTH        : 3       ,
+        ALLOW_REPLACE: 0       ,
     ) (
         clk                     ,
         rst                     ,
@@ -822,7 +827,7 @@ module core (
 
     inst csrq: fifo #(
         DATA_TYPE: euq_type,
-        WIDTH    : 3       ,
+        WIDTH    : 1       ,
     ) (
         clk                     ,
         rst                     ,
