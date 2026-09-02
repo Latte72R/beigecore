@@ -471,18 +471,16 @@ module core (
     var alu_op2: UIntX;
 
     always_comb {
-        let rs1_areg: ArchReg = alu_rdata.bits[19:15];
-        let rs2_areg: ArchReg = alu_rdata.bits[24:20];
-
         case alu_rdata.ctrl.itype {
             InstType::R, InstType::B: {
                 // R-type (add, sub, and, ...) / B-type (branch)
-                alu_op1 = if rs1_areg == 0 ? 0 : alu_read1_data;
-                alu_op2 = if rs2_areg == 0 ? 0 : alu_read2_data;
+                // x0 is permanently mapped to p0, whose PRF value is zero.
+                alu_op1 = alu_read1_data;
+                alu_op2 = alu_read2_data;
             }
             InstType::I, InstType::S: {
                 // I-type (addi, load, store, JALR, CSR) / S-type
-                alu_op1 = if rs1_areg == 0 ? 0 : alu_read1_data;
+                alu_op1 = alu_read1_data;
                 alu_op2 = alu_rdata.imm;
             }
             InstType::U, InstType::J: {
