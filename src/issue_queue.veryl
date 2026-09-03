@@ -6,6 +6,11 @@ module issue_queue (
     rst  : input reset,
     flush: input logic,
 
+    // branch mispredictによる若い命令の削除
+    squash     : input logic ,
+    squash_head: input RobTag, // 現在のROB head tag
+    squash_tag : input RobTag, // mispredict branchのROB tag
+
     // dispatch
     wvalid   : input  logic   ,
     wready   : output logic   ,
@@ -37,10 +42,12 @@ module issue_queue (
         rs2_ready: logic   ,
     }
 
-    var entries     : issue_entry_type    [4];
-    var entries_next: issue_entry_type    [4];
-    var count       : logic           <3>    ;
-    var count_next  : logic           <3>    ;
+    var entries          : issue_entry_type    [4];
+    var entries_next     : issue_entry_type    [4];
+    var count            : logic           <3>    ;
+    var count_next       : logic           <3>    ;
+    var remove           : logic               [4];
+    var compacted_entries: issue_entry_type    [4];
 
     var selected_valid: logic   ;
     var selected_index: logic<2>;
@@ -92,16 +99,27 @@ module issue_queue (
             }
         }
 
-        // issueされたentryを削除し後続entryを1つ前へ詰める
-        if rvalid && rready {
-            for i in 0..3 {
-                if i >= selected_index {
-                    entries_next[i] = entries_next[i + 1];
-                }
-            }
-            entries_next[3] =  '0;
-            count_next      -= 1;
+        // (issueされた or oldな) entryを削除し後続entryを1つ前へ詰める
+        let issue_fire       : logic            = rvalid && rready;
+        let squash_branch_age: logic<ROB_WIDTH> = squash_tag - squash_head;
+        for i in 0..4 {
+            remove[i] = (issue_fire && i == (selected_index as 32))
+                || (squash && entries_next[i].valid && (entries_next[i].data.rob_tag - squash_head)
+                    >: squash_branch_age);
         }
+
+        // issueまたはsquashされていないentryだけを前へ詰める
+        for i in 0..4 {
+            compacted_entries[i] = 0;
+        }
+        count_next = 0;
+        for i in 0..4 {
+            if entries_next[i].valid && !remove[i] {
+                compacted_entries[count_next[1:0]] =  entries_next[i];
+                count_next                         += 1;
+            }
+        }
+        entries_next = compacted_entries;
 
         // 新しい末尾indexに書き込み
         let write_index: logic<2> = count_next[1:0];

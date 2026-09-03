@@ -638,9 +638,9 @@ module core (
         mdu_write_data  = mdu_result;
     }
 
+    let alu_redirect: logic = alu_complete && alu_mispredict;
+    let csr_redirect: logic = csru_complete && csru_raise_trap;
     always_comb {
-        let alu_redirect: logic = alu_complete && alu_mispredict;
-        let csr_redirect: logic = csru_complete && csru_raise_trap;
 
         control_hazard   = alu_redirect || csr_redirect;
         backend_redirect = csr_redirect;
@@ -804,6 +804,10 @@ module core (
         rst                    ,
         flush: backend_redirect,
 
+        squash     : alu_redirect     ,
+        squash_head: rob_head_tag     ,
+        squash_tag : alu_rdata.rob_tag,
+
         wvalid   : alu_wvalid   ,
         wready   : alu_wready   ,
         wdata    : alu_wdata    ,
@@ -844,6 +848,10 @@ module core (
         clk                    ,
         rst                    ,
         flush: backend_redirect,
+
+        squash     : alu_redirect     ,
+        squash_head: rob_head_tag     ,
+        squash_tag : alu_rdata.rob_tag,
 
         wvalid   : mdu_wvalid   ,
         wready   : mdu_wready   ,
