@@ -32,6 +32,7 @@ module core (
 
     var rob_rollback_request    : logic ;
     var rob_rollback_request_tag: RobTag;
+    var rob_rollback_request_pc : Addr  ;
 
     let rob_rollback_fire: logic = rob_rollback_valid && rob_rollback_ready;
 
@@ -282,8 +283,13 @@ module core (
 
     var dispatch_data: euq_type;
 
-    // 未解決の直列化命令がROB/MEM内にある
+    // 未解決の(csr or fence.i)命令がROB内にある
     var serial_pending: logic;
+    // 未解決のbranch命令がROB内にある
+    var branch_pending: logic;
+
+    let ids_is_serial     : logic = ids_is_csr || ids_is_fence_i;
+    let ids_is_spec_branch: logic = inst_is_br(ids_ctrl) || ids_is_jalr;
 
     always_comb {
         // ID rready: 該当キューが空き + ROB 空き
@@ -294,7 +300,7 @@ module core (
             default          : alu_wready,
         };
         i_membus.rready = !rob_rollback_busy && !rob_rollback_start && !serial_pending && rob_allocate_ready
-            && ids_target_ready && ids_preg_ready;
+            && ids_target_ready && ids_preg_ready && (!branch_pending || !ids_is_spec_branch);
 
         // 該当キューの wvalid / wdata を駆動
         alu_wvalid  = ids_fire && ids_is_alu && alu_wready;
@@ -623,8 +629,13 @@ module core (
         mdu_write_data  = mdu_result;
     }
 
-    let alu_redirect: logic = alu_complete && alu_mispredict;
-    let csr_redirect: logic = csru_complete && csru_raise_trap;
+    let alu_redirect   : logic = alu_complete && alu_mispredict;
+    let csr_redirect   : logic = csru_complete && csru_raise_trap;
+    let alu_recovery_pc: Addr  = switch {
+        alu_is_jalr: alu_jalr_target,
+        alu_br_take: (alu_rdata.addr + alu_rdata.imm),
+        default    : (alu_rdata.addr + (if alu_rdata.ctrl.is_rvc ? 2 : 4))
+    };
     always_comb {
         control_hazard   = alu_redirect || csr_redirect;
         backend_redirect = csr_redirect;
@@ -632,11 +643,6 @@ module core (
         rob_rollback_start = rob_rollback_request;
         rob_rollback_tag   = rob_rollback_request_tag;
 
-        let alu_recovery_pc: Addr = switch {
-            alu_is_jalr: alu_jalr_target,
-            alu_br_take: (alu_rdata.addr + alu_rdata.imm),
-            default    : (alu_rdata.addr + (if alu_rdata.ctrl.is_rvc ? 2 : 4))
-        };
         control_hazard_pc_next = if csr_redirect ? csru_trap_vector : alu_recovery_pc;
     }
 
@@ -644,11 +650,13 @@ module core (
         if_reset {
             rob_rollback_request     = 0;
             rob_rollback_request_tag = 0;
+            rob_rollback_request_pc  = 0;
         } else {
             rob_rollback_request = alu_redirect;
 
             if alu_redirect {
                 rob_rollback_request_tag = alu_rdata.rob_tag;
+                rob_rollback_request_pc  = alu_recovery_pc;
             }
         }
     }
@@ -675,11 +683,22 @@ module core (
             serial_pending = 0;
         } else if control_hazard {
             serial_pending = 0;
-        } else if alu_complete && (alu_rdata.ctrl.is_jump || inst_is_br(alu_rdata.ctrl) || alu_is_fence_i)
-            || csru_complete {
+        } else if (alu_complete && alu_is_fence_i) || csru_complete {
             serial_pending = 0;
-        } else if ids_fire && (ids_ctrl.is_jump || inst_is_br(ids_ctrl) || ids_is_csr || ids_is_fence_i) {
+        } else if ids_fire && ids_is_serial {
             serial_pending = 1;
+        }
+    }
+    // branch_pending := 分岐結果がまだ確定していない命令が存在する
+    always_ff {
+        if_reset {
+            branch_pending = 0;
+        } else if control_hazard {
+            branch_pending = 0;
+        } else if alu_complete && (alu_rdata.ctrl.is_jump || inst_is_br(alu_rdata.ctrl)) {
+            branch_pending = 0;
+        } else if ids_fire && ids_is_spec_branch {
+            branch_pending = 1;
         }
     }
 
