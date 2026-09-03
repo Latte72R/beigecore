@@ -247,26 +247,27 @@ module core (
     var memu_active_addr   : Addr    ;
     var memu_active_rs2    : UIntX   ;
 
-    var memu_input_ctrl: InstCtrl;
-    var memu_input_addr: Addr    ;
-    var memu_input_rs2 : UIntX   ;
-    var memu_result    : UIntX   ;
-    var memu_stall     : logic   ;
-    var memu_complete  : logic   ;
+    var memu_input_ctrl   : InstCtrl;
+    var memu_input_addr   : Addr    ;
+    var memu_input_rs2    : UIntX   ;
+    var memu_result       : UIntX   ;
+    var memu_stall        : logic   ;
+    var memu_complete     : logic   ;
+    var memu_done         : logic   ;
+    var memu_response_done: logic   ;
+    var memu_killed       : logic   ;
 
-    var memu_done         : logic;
-    var memu_response_done: logic;
-    var memu_killed       : logic;
-
-    var mdu_wready      : logic   ;
-    var mdu_wvalid      : logic   ;
-    var mdu_rready      : logic   ;
-    var mdu_rvalid      : logic   ;
-    var mdu_wdata       : euq_type;
-    var mdu_rdata       : euq_type;
-    var mdu_grant       : logic   ;
-    var mdu_complete    : logic   ;
-    var mdu_active_entry: euq_type;
+    var mdu_wready       : logic   ;
+    var mdu_wvalid       : logic   ;
+    var mdu_rready       : logic   ;
+    var mdu_rvalid       : logic   ;
+    var mdu_wdata        : euq_type;
+    var mdu_rdata        : euq_type;
+    var mdu_grant        : logic   ;
+    var mdu_complete     : logic   ;
+    var mdu_active_entry : euq_type;
+    var mdu_response_done: logic   ;
+    var mdu_killed       : logic   ;
 
     var csru_wready  : logic   ;
     var csru_wvalid  : logic   ;
@@ -550,18 +551,25 @@ module core (
         if_reset {
             mdu_busy         = 0;
             mdu_active_entry = '0;
+            mdu_killed       = 0;
         } else if backend_redirect {
             mdu_busy         = 0;
             mdu_active_entry = '0;
-        } else {
-            if mdu_grant {
-                mdu_busy         = 1;
-                mdu_active_entry = mdu_rdata;
-            }
-
-            if mdu_complete {
-                mdu_busy = 0;
-            }
+            mdu_killed       = 0;
+        } else if mdu_response_done {
+            // killされた命令でもMDU自体は完了させて解放する
+            mdu_busy   = 0;
+            mdu_killed = 0;
+        } else if mdu_grant {
+            // Issue Queueから取り出した命令をMDU内で保持する
+            mdu_busy         = 1;
+            mdu_active_entry = mdu_rdata;
+            mdu_killed       = 0;
+        } else if rob_rollback_request && mdu_busy && (mdu_active_entry.rob_tag - rob_rollback_request_head)
+            >: (rob_rollback_request_tag - rob_rollback_request_head) {
+            // branchより若い実行中MDU命令をsquashする
+            // 演算は止めず結果だけを破棄する
+            mdu_killed = 1;
         }
     }
 
@@ -618,9 +626,11 @@ module core (
             memu_active_rs2     = 0;
             memu_killed         = 0;
         } else if memu_response_done {
+            // killされた命令でもMEMU自体は完了させて解放する
             memu_active = 0;
             memu_killed = 0;
         } else if loadu_grant {
+            // Issue Queueから取り出した命令をMEMU内で保持する
             memu_active         = 1;
             memu_active_is_load = 1;
             memu_active_entry   = loadu_rdata;
@@ -628,6 +638,7 @@ module core (
             memu_active_rs2     = 0;
             memu_killed         = 0;
         } else if storeu_grant {
+            // Issue Queueから取り出した命令をMEMU内で保持する
             memu_active         = 1;
             memu_active_is_load = 0;
             memu_active_entry   = storeu_rdata;
@@ -636,7 +647,8 @@ module core (
             memu_killed         = 0;
         } else if rob_rollback_request && memu_active && (memu_active_entry.rob_tag - rob_rollback_request_head)
             >: (rob_rollback_request_tag - rob_rollback_request_head) {
-            // memory responseは受け取るがPRF/ROBへ反映しない
+            // branchより若い実行中MEMU命令をsquashする
+            // 演算は止めず結果だけを破棄する
             memu_killed = 1;
         }
     }
@@ -717,16 +729,23 @@ module core (
 
     always_comb {
         alu_complete = alu_grant;
-        mdu_complete = mdu_busy && mdu_result_valid;
 
-        // MEMUが保持しているrequestに対するmemory responseの完了
+        // 内部の演算が完了したか
+        mdu_response_done  = mdu_busy && mdu_result_valid;
         memu_response_done = memu_done;
-        // 現在のcycleでこのMEMU結果を外部へ通知してよいかを判定
+
+        // 既にkill済みまたはこのcycleにrollback対象になった場合は演算結果をPRF/ROBへ送らない
+        let mdu_killed_now : logic = mdu_killed
+            || (rob_rollback_request && mdu_busy && (mdu_active_entry.rob_tag - rob_rollback_request_head)
+                >: (rob_rollback_request_tag - rob_rollback_request_head));
         let memu_killed_now: logic = memu_killed
             || (rob_rollback_request && memu_active && (memu_active_entry.rob_tag - rob_rollback_request_head)
                 >: (rob_rollback_request_tag - rob_rollback_request_head));
 
-        memu_complete   = memu_response_done && !memu_killed_now;
+        // killされた命令は完了扱いにしない
+        mdu_complete  = mdu_response_done && !mdu_killed_now;
+        memu_complete = memu_response_done && !memu_killed_now;
+
         loadu_complete  = memu_complete && memu_active_is_load;
         storeu_complete = memu_complete && !memu_active_is_load;
         csru_complete   = csru_active;
