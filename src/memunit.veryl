@@ -10,6 +10,7 @@ module memunit (
     rdata : output  UIntX               , // ロード命令の結果 (stall = 0のときに有効)
     stall : output  logic               , // メモリアクセス命令が完了していない
     membus: modport core_data_if::master, // メモリとのinterface
+    done  : output  logic               ,
 ) {
     // memunitの状態を表す列挙型
     enum State: logic<2> {
@@ -31,7 +32,7 @@ module memunit (
 
     const W   : u32                      = XLEN;
     let   D   : logic<MEMBUS_DATA_WIDTH> = membus.rdata;
-    let   sext: logic                    = ctrl.funct3[2] == 1'b0;
+    let   sext: logic                    = req_funct3[2] == 1'b0;
 
     always_comb {
         // メモリアクセス
@@ -47,9 +48,9 @@ module memunit (
         membus.funct3 = req_funct3;
 
         // loadの結果
-        rdata = case ctrl.funct3[1:0] {
+        rdata = case req_funct3[1:0] {
             // 8 bit load
-            2'b00: case addr[2:0] {
+            2'b00: case req_addr[2:0] {
                 0      : {sext & D[7] repeat W - 8, D[7:0]},
                 1      : {sext & D[15] repeat W - 8, D[15:8]},
                 2      : {sext & D[23] repeat W - 8, D[23:16]},
@@ -61,7 +62,7 @@ module memunit (
                 default: 'x,
             },
             // 16 bit load
-            2'b01: case addr[2:0] {
+            2'b01: case req_addr[2:0] {
                 0      : {sext & D[15] repeat W - 16, D[15:0]},
                 2      : {sext & D[31] repeat W - 16, D[31:16]},
                 4      : {sext & D[47] repeat W - 16, D[47:32]},
@@ -69,7 +70,7 @@ module memunit (
                 default: 'x,
             },
             // 32 bit load
-            2'b10: case addr[2:0] {
+            2'b10: case req_addr[2:0] {
                 0      : {sext & D[31] repeat W - 32, D[31:0]},
                 4      : {sext & D[63] repeat W - 32, D[63:32]},
                 default: 'x,
@@ -87,6 +88,7 @@ module memunit (
                 State::WaitValid: !membus.rvalid,
                 default         : 0,
             };
+        done = state == State::WaitValid && membus.rvalid;
     }
     always_ff {
         if_reset {

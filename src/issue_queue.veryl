@@ -32,6 +32,11 @@ module issue_queue (
     rvalid: output logic   ,
     rready: input  logic   ,
     rdata : output euq_type,
+
+    // program order上で最も古いentry
+    // operandがreadyでなくてもmemory依存判定に使用する
+    oldest_valid: output logic   ,
+    oldest_data : output euq_type,
 ) {
     // entry[0]が最古，entry[count - 1]が最新
     // 任意entryをissueした後は後続entryを前へ詰める
@@ -73,7 +78,11 @@ module issue_queue (
         rdata  = entries[selected_index].data;
     }
 
-    assign wready = count != 4 || (rvalid && rready);
+    always_comb {
+        wready       = count != 4 || (rvalid && rready);
+        oldest_valid = count != 0;
+        oldest_data  = entries[0].data;
+    }
 
     // 次状態の更新順序:
     //   1. writeback tagによるwakeup

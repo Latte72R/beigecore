@@ -173,15 +173,6 @@ module core (
 
     var prf_busy: logic [PREG_COUNT];
 
-    var wakeup0_valid_q: logic  ;
-    var wakeup0_preg_q : PhysReg;
-    var wakeup1_valid_q: logic  ;
-    var wakeup1_preg_q : PhysReg;
-    var wakeup2_valid_q: logic  ;
-    var wakeup2_preg_q : PhysReg;
-    var wakeup3_valid_q: logic  ;
-    var wakeup3_preg_q : PhysReg;
-
     var alu_read1_addr   : PhysReg;
     var alu_read1_data   : UIntX  ;
     var alu_read2_addr   : PhysReg;
@@ -211,6 +202,17 @@ module core (
     var csru_write_valid : logic  ;
     var csru_write_addr  : PhysReg;
     var csru_write_data  : UIntX  ;
+
+    var alu_oldest_valid   : logic   ;
+    var alu_oldest_data    : euq_type;
+    var loadu_oldest_valid : logic   ;
+    var loadu_oldest_data  : euq_type;
+    var storeu_oldest_valid: logic   ;
+    var storeu_oldest_data : euq_type;
+    var mdu_oldest_valid   : logic   ;
+    var mdu_oldest_data    : euq_type;
+    var csru_oldest_valid  : logic   ;
+    var csru_oldest_data   : euq_type;
 
     var alu_wready  : logic   ;
     var alu_wvalid  : logic   ;
@@ -251,6 +253,10 @@ module core (
     var memu_result    : UIntX   ;
     var memu_stall     : logic   ;
     var memu_complete  : logic   ;
+
+    var memu_done         : logic;
+    var memu_response_done: logic;
+    var memu_killed       : logic;
 
     var mdu_wready      : logic   ;
     var mdu_wvalid      : logic   ;
@@ -305,36 +311,6 @@ module core (
             if rename_fire {
                 prf_busy[ids_new_preg] = 1;
             }
-        }
-    }
-
-    always_ff {
-        if_reset {
-            wakeup0_valid_q = 0;
-            wakeup1_valid_q = 0;
-            wakeup2_valid_q = 0;
-            wakeup3_valid_q = 0;
-            wakeup0_preg_q  = 0;
-            wakeup1_preg_q  = 0;
-            wakeup2_preg_q  = 0;
-            wakeup3_preg_q  = 0;
-        } else if backend_redirect {
-            wakeup0_valid_q = 0;
-            wakeup1_valid_q = 0;
-            wakeup2_valid_q = 0;
-            wakeup3_valid_q = 0;
-        } else {
-            wakeup0_valid_q = alu_write_valid;
-            wakeup0_preg_q  = alu_write_addr;
-
-            wakeup1_valid_q = loadu_write_valid;
-            wakeup1_preg_q  = loadu_write_addr;
-
-            wakeup2_valid_q = mdu_write_valid;
-            wakeup2_preg_q  = mdu_write_addr;
-
-            wakeup3_valid_q = csru_write_valid;
-            wakeup3_preg_q  = csru_write_addr;
         }
     }
 
@@ -600,19 +576,28 @@ module core (
             memu_input_ctrl = memu_active_entry.ctrl;
             memu_input_addr = memu_active_addr;
             memu_input_rs2  = memu_active_rs2;
+        } else if loadu_grant {
+            memu_input_ctrl = loadu_rdata.ctrl;
+            memu_input_addr = loadu_read_data + loadu_rdata.imm;
+            memu_input_rs2  = 0;
+        } else if storeu_grant {
+            memu_input_ctrl = storeu_rdata.ctrl;
+            memu_input_addr = storeu_read1_data + storeu_rdata.imm;
+            memu_input_rs2  = storeu_read2_data;
         }
     }
 
     inst memu: memunit (
-        clk   : clk            ,
-        rst   : rst            ,
-        valid : memu_active    ,
-        ctrl  : memu_input_ctrl,
-        addr  : memu_input_addr,
-        rs2   : memu_input_rs2 ,
-        rdata : memu_result    ,
-        stall : memu_stall     ,
-        membus: d_membus       ,
+        clk   : clk                                       ,
+        rst   : rst                                       ,
+        valid : memu_active || loadu_grant || storeu_grant,
+        ctrl  : memu_input_ctrl                           ,
+        addr  : memu_input_addr                           ,
+        rs2   : memu_input_rs2                            ,
+        rdata : memu_result                               ,
+        stall : memu_stall                                ,
+        done  : memu_done                                 ,
+        membus: d_membus                                  ,
     );
 
     var minstret: UInt64;
@@ -624,31 +609,39 @@ module core (
             memu_active_entry   = '0;
             memu_active_addr    = 0;
             memu_active_rs2     = 0;
+            memu_killed         = 0;
         } else if backend_redirect {
             memu_active         = 0;
             memu_active_is_load = 0;
             memu_active_entry   = '0;
             memu_active_addr    = 0;
             memu_active_rs2     = 0;
-        } else if memu_complete {
+            memu_killed         = 0;
+        } else if memu_response_done {
             memu_active = 0;
+            memu_killed = 0;
         } else if loadu_grant {
             memu_active         = 1;
             memu_active_is_load = 1;
             memu_active_entry   = loadu_rdata;
             memu_active_addr    = loadu_read_data + loadu_rdata.imm;
             memu_active_rs2     = 0;
+            memu_killed         = 0;
         } else if storeu_grant {
             memu_active         = 1;
             memu_active_is_load = 0;
             memu_active_entry   = storeu_rdata;
             memu_active_addr    = storeu_read1_data + storeu_rdata.imm;
             memu_active_rs2     = storeu_read2_data;
+            memu_killed         = 0;
+        } else if rob_rollback_request && memu_active && (memu_active_entry.rob_tag - rob_rollback_request_head)
+            >: (rob_rollback_request_tag - rob_rollback_request_head) {
+            // memory responseは受け取るがPRF/ROBへ反映しない
+            memu_killed = 1;
         }
     }
 
     let storeu_at_head: logic = storeu_rvalid && rob_head_valid && rob_head_tag == storeu_rdata.rob_tag;
-    let loadu_at_head : logic = rob_head_valid && rob_head_tag == loadu_rdata.rob_tag;
 
     ///////////////////////////////// EX Stage (CSRU) /////////////////////////////////
 
@@ -702,17 +695,19 @@ module core (
 
     ///////////////////////////////// EX Stage (Issue / Completion) /////////////////////////////////
 
+    let load_has_older_store: logic = storeu_oldest_valid && (storeu_oldest_data.rob_tag - rob_head_tag)
+        <: (loadu_rdata.rob_tag - rob_head_tag);
+
     // issue_queueのrvalidは内部のでソースレジスタがreadyなentryだけを選んでいる
-    let load_candidate : logic = loadu_rvalid && loadu_at_head;
+    let load_candidate : logic = loadu_rvalid && !load_has_older_store;
     let store_candidate: logic = storeu_rvalid && storeu_at_head;
 
     always_comb {
-        // StoreはROB先頭かつoperand readyなら実行開始・継続
+        // Storeはprecise state維持のためROB先頭のみ
         storeu_grant = !memu_active && store_candidate;
-        // LoadはROB先頭かつoperand readyなら実行開始・継続 <- あとでROB先頭を外す
+        // older Storeが存在しないLoadはROB先頭より前でも実行可能
         loadu_grant = !memu_active && !storeu_grant && load_candidate;
-        // loadu_grant = loadu_rvalid && loadu_sources_ready;
-        // MDUはMDUがidleなら実行開始・継続
+        // MDUがidleなら実行開始・継続
         mdu_grant = mdu_rvalid && mdu_ready && !mdu_busy;
         // CSRはROB先頭かつoperand readyなら実行
         csru_grant = !csru_active && csru_rvalid && csru_at_head;
@@ -721,9 +716,17 @@ module core (
     }
 
     always_comb {
-        alu_complete    = alu_grant;
-        mdu_complete    = mdu_busy && mdu_result_valid;
-        memu_complete   = memu_active && !memu_stall;
+        alu_complete = alu_grant;
+        mdu_complete = mdu_busy && mdu_result_valid;
+
+        // MEMUが保持しているrequestに対するmemory responseの完了
+        memu_response_done = memu_done;
+        // 現在のcycleでこのMEMU結果を外部へ通知してよいかを判定
+        let memu_killed_now: logic = memu_killed
+            || (rob_rollback_request && memu_active && (memu_active_entry.rob_tag - rob_rollback_request_head)
+                >: (rob_rollback_request_tag - rob_rollback_request_head));
+
+        memu_complete   = memu_response_done && !memu_killed_now;
         loadu_complete  = memu_complete && memu_active_is_load;
         storeu_complete = memu_complete && !memu_active_is_load;
         csru_complete   = csru_active;
@@ -978,18 +981,21 @@ module core (
         wrs1ready: dispatch_wrs1ready,
         wrs2ready: dispatch_wrs2ready,
 
-        wakeup0_valid: wakeup0_valid_q,
-        wakeup0_preg : wakeup0_preg_q ,
-        wakeup1_valid: wakeup1_valid_q,
-        wakeup1_preg : wakeup1_preg_q ,
-        wakeup2_valid: wakeup2_valid_q,
-        wakeup2_preg : wakeup2_preg_q ,
-        wakeup3_valid: wakeup3_valid_q,
-        wakeup3_preg : wakeup3_preg_q ,
+        wakeup0_valid: alu_write_valid  ,
+        wakeup0_preg : alu_write_addr   ,
+        wakeup1_valid: loadu_write_valid,
+        wakeup1_preg : loadu_write_addr ,
+        wakeup2_valid: mdu_write_valid  ,
+        wakeup2_preg : mdu_write_addr   ,
+        wakeup3_valid: csru_write_valid ,
+        wakeup3_preg : csru_write_addr  ,
 
         rvalid: alu_rvalid,
         rready: alu_rready,
         rdata : alu_rdata ,
+
+        oldest_valid: alu_oldest_valid,
+        oldest_data : alu_oldest_data ,
     );
 
     inst loadq: issue_queue (
@@ -1007,18 +1013,21 @@ module core (
         wrs1ready: dispatch_wrs1ready,
         wrs2ready: dispatch_wrs2ready,
 
-        wakeup0_valid: wakeup0_valid_q,
-        wakeup0_preg : wakeup0_preg_q ,
-        wakeup1_valid: wakeup1_valid_q,
-        wakeup1_preg : wakeup1_preg_q ,
-        wakeup2_valid: wakeup2_valid_q,
-        wakeup2_preg : wakeup2_preg_q ,
-        wakeup3_valid: wakeup3_valid_q,
-        wakeup3_preg : wakeup3_preg_q ,
+        wakeup0_valid: alu_write_valid  ,
+        wakeup0_preg : alu_write_addr   ,
+        wakeup1_valid: loadu_write_valid,
+        wakeup1_preg : loadu_write_addr ,
+        wakeup2_valid: mdu_write_valid  ,
+        wakeup2_preg : mdu_write_addr   ,
+        wakeup3_valid: csru_write_valid ,
+        wakeup3_preg : csru_write_addr  ,
 
         rvalid: loadu_rvalid,
         rready: loadu_rready,
         rdata : loadu_rdata ,
+
+        oldest_valid: loadu_oldest_valid,
+        oldest_data : loadu_oldest_data ,
     );
 
     inst storeq: issue_queue (
@@ -1036,18 +1045,21 @@ module core (
         wrs1ready: dispatch_wrs1ready,
         wrs2ready: dispatch_wrs2ready,
 
-        wakeup0_valid: wakeup0_valid_q,
-        wakeup0_preg : wakeup0_preg_q ,
-        wakeup1_valid: wakeup1_valid_q,
-        wakeup1_preg : wakeup1_preg_q ,
-        wakeup2_valid: wakeup2_valid_q,
-        wakeup2_preg : wakeup2_preg_q ,
-        wakeup3_valid: wakeup3_valid_q,
-        wakeup3_preg : wakeup3_preg_q ,
+        wakeup0_valid: alu_write_valid  ,
+        wakeup0_preg : alu_write_addr   ,
+        wakeup1_valid: loadu_write_valid,
+        wakeup1_preg : loadu_write_addr ,
+        wakeup2_valid: mdu_write_valid  ,
+        wakeup2_preg : mdu_write_addr   ,
+        wakeup3_valid: csru_write_valid ,
+        wakeup3_preg : csru_write_addr  ,
 
         rvalid: storeu_rvalid,
         rready: storeu_rready,
         rdata : storeu_rdata ,
+
+        oldest_valid: storeu_oldest_valid,
+        oldest_data : storeu_oldest_data ,
     );
 
     inst muldivq: issue_queue (
@@ -1065,18 +1077,21 @@ module core (
         wrs1ready: dispatch_wrs1ready,
         wrs2ready: dispatch_wrs2ready,
 
-        wakeup0_valid: wakeup0_valid_q,
-        wakeup0_preg : wakeup0_preg_q ,
-        wakeup1_valid: wakeup1_valid_q,
-        wakeup1_preg : wakeup1_preg_q ,
-        wakeup2_valid: wakeup2_valid_q,
-        wakeup2_preg : wakeup2_preg_q ,
-        wakeup3_valid: wakeup3_valid_q,
-        wakeup3_preg : wakeup3_preg_q ,
+        wakeup0_valid: alu_write_valid  ,
+        wakeup0_preg : alu_write_addr   ,
+        wakeup1_valid: loadu_write_valid,
+        wakeup1_preg : loadu_write_addr ,
+        wakeup2_valid: mdu_write_valid  ,
+        wakeup2_preg : mdu_write_addr   ,
+        wakeup3_valid: csru_write_valid ,
+        wakeup3_preg : csru_write_addr  ,
 
         rvalid: mdu_rvalid,
         rready: mdu_rready,
         rdata : mdu_rdata ,
+
+        oldest_valid: mdu_oldest_valid,
+        oldest_data : mdu_oldest_data ,
     );
 
     inst csrq: issue_queue (
@@ -1094,18 +1109,21 @@ module core (
         wrs1ready: dispatch_wrs1ready,
         wrs2ready: dispatch_wrs2ready,
 
-        wakeup0_valid: wakeup0_valid_q,
-        wakeup0_preg : wakeup0_preg_q ,
-        wakeup1_valid: wakeup1_valid_q,
-        wakeup1_preg : wakeup1_preg_q ,
-        wakeup2_valid: wakeup2_valid_q,
-        wakeup2_preg : wakeup2_preg_q ,
-        wakeup3_valid: wakeup3_valid_q,
-        wakeup3_preg : wakeup3_preg_q ,
+        wakeup0_valid: alu_write_valid  ,
+        wakeup0_preg : alu_write_addr   ,
+        wakeup1_valid: loadu_write_valid,
+        wakeup1_preg : loadu_write_addr ,
+        wakeup2_valid: mdu_write_valid  ,
+        wakeup2_preg : mdu_write_addr   ,
+        wakeup3_valid: csru_write_valid ,
+        wakeup3_preg : csru_write_addr  ,
 
         rready: csru_rready,
         rvalid: csru_rvalid,
         rdata : csru_rdata ,
+
+        oldest_valid: csru_oldest_valid,
+        oldest_data : csru_oldest_data ,
     );
 
     inst rob: reorder_buffer #(
