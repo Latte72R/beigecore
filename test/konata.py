@@ -11,6 +11,9 @@ import collections
 import sys
 
 
+ROB_TAG_MASK = (1 << 4) - 1
+
+
 def number(text):
     return int(text, 16)
 
@@ -119,6 +122,37 @@ def main():
             finish(inst_id, cycle, True)
         rob.clear()
 
+    def kill_younger_rob(cycle, branch_tag, head_tag):
+        """Flush ROB entries younger than a mispredicted branch.
+
+        ROB tags are a ring counter, so their numeric value alone does not
+        describe age.  The distance from the ROB head is used instead.
+        """
+        branch_age = (branch_tag - head_tag) & ROB_TAG_MASK
+        for tag, inst_id in list(rob.items()):
+            entry_age = (tag - head_tag) & ROB_TAG_MASK
+            if entry_age > branch_age:
+                finish(inst_id, cycle, True)
+                del rob[tag]
+
+    def kill_younger_rob_legacy(cycle, pc, bits):
+        """Best-effort handling for raw logs from before tag metadata."""
+        branch_ids = [
+            inst_id
+            for inst_id in rob.values()
+            if instructions[inst_id]["alive"]
+            and instructions[inst_id]["pc"] == pc
+            and instructions[inst_id]["bits"] == bits
+        ]
+        if not branch_ids:
+            return
+
+        branch_id = max(branch_ids)
+        for tag, inst_id in list(rob.items()):
+            if instructions[inst_id]["id"] > branch_id:
+                finish(inst_id, cycle, True)
+                del rob[tag]
+
     for current_cycle, _, kind, fields in raw_events:
         if kind == "Q":
             addr = number(fields[0])
@@ -152,9 +186,19 @@ def main():
         elif kind == "C":
             tag = int(fields[0])
             if tag in rob:
-                transition(rob[tag], current_cycle, 4, "W")
-            else:
-                print(f"konata.py: completion for unknown ROB tag {tag}", file=sys.stderr)
+                inst_id = rob[tag]
+                # A killed operation may complete after rollback.  Newer
+                # traces carry the instruction identity so a stale completion
+                # cannot be applied to a re-used ROB tag.
+                matches = len(fields) < 3 or (
+                    instructions[inst_id]["pc"] == number(fields[1])
+                    and instructions[inst_id]["bits"] == number(fields[2])
+                )
+                if matches:
+                    transition(inst_id, current_cycle, 4, "W")
+            # A completion can arrive after its operation was squashed.  Old
+            # raw logs contain only the ROB tag, so there is no reliable way
+            # to distinguish that case from a tag-generation mismatch.
         elif kind == "W":
             tag = int(fields[0])
             if tag in rob:
@@ -170,6 +214,17 @@ def main():
                 kill(execute, current_cycle)
             if redirect_kind == "BACKEND":
                 kill_rob(current_cycle)
+            elif redirect_kind == "CTRL":
+                if len(fields) >= 6:
+                    branch_tag = int(fields[4])
+                    head_tag = int(fields[5])
+                    kill_younger_rob(current_cycle, branch_tag, head_tag)
+                else:
+                    kill_younger_rob_legacy(
+                        current_cycle,
+                        number(fields[1]),
+                        number(fields[2]),
+                    )
             epoch += 1
             outstanding.clear()
 

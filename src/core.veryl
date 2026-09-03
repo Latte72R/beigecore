@@ -868,16 +868,34 @@ module core (
                     );
                 }
                 if alu_complete {
-                    $display("K\t%0d\tC\t%0d", trace_cycle, alu_rdata.rob_tag);
+                    $display("K\t%0d\tC\t%0d\t%h\t%h", trace_cycle, alu_rdata.rob_tag, alu_rdata.addr, alu_rdata.bits);
                 }
                 if loadu_complete || storeu_complete {
-                    $display("K\t%0d\tC\t%0d", trace_cycle, memu_active_entry.rob_tag);
+                    $display(
+                        "K\t%0d\tC\t%0d\t%h\t%h",
+                        trace_cycle,
+                        memu_active_entry.rob_tag,
+                        memu_active_entry.addr,
+                        memu_active_entry.bits,
+                    );
                 }
                 if mdu_complete {
-                    $display("K\t%0d\tC\t%0d", trace_cycle, mdu_active_entry.rob_tag);
+                    $display(
+                        "K\t%0d\tC\t%0d\t%h\t%h",
+                        trace_cycle,
+                        mdu_active_entry.rob_tag,
+                        mdu_active_entry.addr,
+                        mdu_active_entry.bits,
+                    );
                 }
                 if csru_complete {
-                    $display("K\t%0d\tC\t%0d", trace_cycle, csru_rdata.rob_tag);
+                    $display(
+                        "K\t%0d\tC\t%0d\t%h\t%h",
+                        trace_cycle,
+                        csru_active_entry.rob_tag,
+                        csru_active_entry.addr,
+                        csru_active_entry.bits,
+                    );
                 }
                 // Register writeの有無にかかわらず、すべてのROB commitを記録する
                 if rob_commit_valid && rob_commit_ready {
@@ -899,11 +917,13 @@ module core (
                     );
                 } else if control_hazard {
                     $display(
-                        "K\t%0d\tR\tCTRL\t%h\t%h\t%h",
+                        "K\t%0d\tR\tCTRL\t%h\t%h\t%h\t%0d\t%0d",
                         trace_cycle,
                         alu_rdata.addr,
                         alu_rdata.bits,
                         control_hazard_pc_next,
+                        alu_rdata.rob_tag,
+                        rob_head_tag,
                     );
                 } else if prediction_redirect {
                     $display("K\t%0d\tR\tPRED\t%h\t%h\t%h", trace_cycle, ids_pc, ids_inst_bits, ids_pred_target);
