@@ -601,8 +601,8 @@ module core (
         && (!memu_rdata.uses_rs2 || !prf_busy[memu_rdata.rs2_preg]);
 
     always_comb {
-        // MEMはROB先頭かつoperand readyなら実行開始・継続
-        memu_grant = memu_at_head && memu_sources_ready;
+        // MEMは(storeでないまたはROB先頭)かつoperand readyなら実行開始・継続
+        memu_grant = memu_rvalid && memu_sources_ready && (!inst_is_store(memu_rdata.ctrl) || memu_at_head);
         // MDUはMDUがidleなら実行開始・継続
         mdu_grant = mdu_rvalid && mdu_ready && !mdu_busy;
         // CSRはROB先頭かつoperand readyなら実行
