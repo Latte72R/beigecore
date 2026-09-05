@@ -985,7 +985,10 @@ module core (
 
     ///////////////////////////////// FIFO /////////////////////////////////
 
-    inst aluq: issue_queue (
+    inst aluq: issue_queue #(
+        ENTRY_COUNT: 8,
+        INDEX_WIDTH: 3,
+    ) (
         clk                    ,
         rst                    ,
         flush: backend_redirect,
@@ -1081,7 +1084,10 @@ module core (
         oldest_data : storeu_oldest_data ,
     );
 
-    inst muldivq: issue_queue (
+    inst muldivq: issue_queue #(
+        ENTRY_COUNT: 8,
+        INDEX_WIDTH: 3,
+    ) (
         clk                    ,
         rst                    ,
         flush: backend_redirect,

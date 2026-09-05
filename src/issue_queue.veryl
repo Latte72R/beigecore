@@ -1,7 +1,10 @@
 import eei::*;
 import corectrl::*;
 
-module issue_queue (
+module issue_queue #(
+    param ENTRY_COUNT: u32 = 4,
+    param INDEX_WIDTH: u32 = 2,
+) (
     clk  : input clock,
     rst  : input reset,
     flush: input logic,
@@ -47,39 +50,80 @@ module issue_queue (
         rs2_ready: logic   ,
     }
 
-    var entries          : issue_entry_type    [4];
-    var entries_next     : issue_entry_type    [4];
-    var count            : logic           <3>    ;
-    var count_next       : logic           <3>    ;
-    var remove           : logic               [4];
-    var compacted_entries: issue_entry_type    [4];
+    type Index = logic<INDEX_WIDTH>    ;
+    type Count = logic<INDEX_WIDTH + 1>;
 
-    var selected_valid: logic   ;
-    var selected_index: logic<2>;
+    var entries          : issue_entry_type [ENTRY_COUNT];
+    var entries_next     : issue_entry_type [ENTRY_COUNT];
+    var count            : Count                         ;
+    var count_next       : Count                         ;
+    var remove           : logic            [ENTRY_COUNT];
+    var compacted_entries: issue_entry_type [ENTRY_COUNT];
 
-    let ready0: logic = entries[0].valid && entries[0].rs1_ready && entries[0].rs2_ready;
-    let ready1: logic = entries[1].valid && entries[1].rs1_ready && entries[1].rs2_ready;
-    let ready2: logic = entries[2].valid && entries[2].rs1_ready && entries[2].rs2_ready;
-    let ready3: logic = entries[3].valid && entries[3].rs1_ready && entries[3].rs2_ready;
+    var selected_valid: logic              ;
+    var selected_index: Index              ;
+    var ready         : logic [ENTRY_COUNT];
 
-    // readyなentryのうち最も古いものを選択する
     always_comb {
-        selected_valid = ready0 || ready1 || ready2 || ready3;
+        for i in 0..ENTRY_COUNT {
+            ready[i] = entries[i].valid && entries[i].rs1_ready && entries[i].rs2_ready;
+        }
+    }
 
-        selected_index = switch {
-            ready0 : 0,
-            ready1 : 1,
-            ready2 : 2,
-            ready3 : 3,
-            default: 0,
-        };
+    if ENTRY_COUNT == 8 :select_eight {
+        let ready_low: logic = ready[0] || ready[1] || ready[2] || ready[3];
 
-        rvalid = selected_valid;
-        rdata  = entries[selected_index].data;
+        let ready_high: logic = ready[4] || ready[5] || ready[6] || ready[7];
+
+        var low_index : logic<2>;
+        var high_index: logic<2>;
+
+        let low_data01 : euq_type = if ready[0] ? entries[0].data : entries[1].data;
+        let low_data23 : euq_type = if ready[2] ? entries[2].data : entries[3].data;
+        let high_data45: euq_type = if ready[4] ? entries[4].data : entries[5].data;
+        let high_data67: euq_type = if ready[6] ? entries[6].data : entries[7].data;
+        let low_data   : euq_type = if ready[0] || ready[1] ? low_data01 : low_data23;
+        let high_data  : euq_type = if ready[4] || ready[5] ? high_data45 : high_data67;
+
+        always_comb {
+            low_index = switch {
+                ready[0]: 0,
+                ready[1]: 1,
+                ready[2]: 2,
+                default : 3,
+            };
+            high_index = switch {
+                ready[4]: 0,
+                ready[5]: 1,
+                ready[6]: 2,
+                default : 3,
+            };
+
+            selected_valid = ready_low || ready_high;
+            selected_index = if ready_low ? {1'b0, low_index} : {1'b1, high_index};
+            rvalid         = selected_valid;
+
+            // 重要：selected_indexで8:1 MUXを作らない
+            rdata = if ready_low ? low_data : high_data;
+        }
+    } else {
+        always_comb {
+            selected_valid = ready[0] || ready[1] || ready[2] || ready[3];
+
+            selected_index = switch {
+                ready[0]: 0,
+                ready[1]: 1,
+                ready[2]: 2,
+                default : 3,
+            };
+
+            rvalid = selected_valid;
+            rdata  = entries[selected_index].data;
+        }
     }
 
     always_comb {
-        wready       = count != 4 || (rvalid && rready);
+        wready       = count != ENTRY_COUNT as Count || (rvalid && rready);
         oldest_valid = count != 0;
         oldest_data  = entries[0].data;
     }
@@ -92,7 +136,7 @@ module issue_queue (
         count_next   = count;
         entries_next = entries;
 
-        for i in 0..4 {
+        for i in 0..ENTRY_COUNT {
             if (wakeup0_valid && entries[i].data.rs1_preg == wakeup0_preg)
                 || (wakeup1_valid && entries[i].data.rs1_preg == wakeup1_preg)
                 || (wakeup2_valid && entries[i].data.rs1_preg == wakeup2_preg)
@@ -111,27 +155,27 @@ module issue_queue (
         // (issueされた or oldな) entryを削除し後続entryを1つ前へ詰める
         let issue_fire       : logic            = rvalid && rready;
         let squash_branch_age: logic<ROB_WIDTH> = squash_tag - squash_head;
-        for i in 0..4 {
-            remove[i] = (issue_fire && i == (selected_index as 32))
+        for i in 0..ENTRY_COUNT {
+            remove[i] = (issue_fire && i == (selected_index as u32))
                 || (squash && entries_next[i].valid && (entries_next[i].data.rob_tag - squash_head)
                     >: squash_branch_age);
         }
 
         // issueまたはsquashされていないentryだけを前へ詰める
-        for i in 0..4 {
+        for i in 0..ENTRY_COUNT {
             compacted_entries[i] = 0;
         }
         count_next = 0;
-        for i in 0..4 {
+        for i in 0..ENTRY_COUNT {
             if entries_next[i].valid && !remove[i] {
-                compacted_entries[count_next[1:0]] =  entries_next[i];
-                count_next                         += 1;
+                compacted_entries[count_next[INDEX_WIDTH - 1:0]] =  entries_next[i];
+                count_next                                       += 1;
             }
         }
         entries_next = compacted_entries;
 
         // 新しい末尾indexに書き込み
-        let write_index: logic<2> = count_next[1:0];
+        let write_index: Index = count_next[INDEX_WIDTH - 1:0];
         if wvalid && wready {
             entries_next[write_index].valid     =  1;
             entries_next[write_index].data      =  wdata;
@@ -146,12 +190,12 @@ module issue_queue (
     always_ff {
         if_reset {
             count = 0;
-            for i in 0..4 {
+            for i in 0..ENTRY_COUNT {
                 entries[i] = '0;
             }
         } else if flush {
             count = 0;
-            for i in 0..4 {
+            for i in 0..ENTRY_COUNT {
                 entries[i].valid = 0;
             }
         } else {
