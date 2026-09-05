@@ -842,7 +842,7 @@ module core (
             branch_pending = 0;
         } else if control_hazard {
             branch_pending = 0;
-        } else if alu_complete && (alu_rdata.ctrl.is_jump || inst_is_br(alu_rdata.ctrl)) {
+        } else if alu_complete && (alu_is_jalr || inst_is_br(alu_rdata.ctrl)) {
             branch_pending = 0;
         } else if ids_fire && ids_is_spec_branch {
             branch_pending = 1;
