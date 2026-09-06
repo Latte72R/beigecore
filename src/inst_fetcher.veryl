@@ -186,6 +186,9 @@ module inst_fetcher (
     var fetch_requested   : logic;
     var fetch_pc_requested: Addr ;
 
+    let redirect_addr  : Addr = {core_if.next_pc[XLEN - 1:3], 3'b0};
+    let prediction_addr: Addr = {core_if.redirect_fetch_pc[XLEN - 1:3], 3'b0};
+
     always_comb {
         mem_if.valid = 0;
         mem_if.addr  = 0;
@@ -193,7 +196,12 @@ module inst_fetcher (
         mem_if.wdata = 0;
         mem_if.wmask = 0;
 
-        if !core_if.is_redirect {
+        if core_if.redirect_fetch_now {
+            // Decode段の予測redirectだけは同じサイクルにtargetを要求する
+            // 既存要求がある場合はその応答を受け取るサイクルに切り替える
+            mem_if.valid = !fetch_requested || mem_if.rvalid;
+            mem_if.addr  = prediction_addr;
+        } else {
             mem_if.valid = fetch_fifo_wready;
             if fetch_requested {
                 mem_if.valid = mem_if.valid && mem_if.rvalid;
@@ -217,9 +225,15 @@ module inst_fetcher (
             fetch_pc_requested = 0;
         } else {
             if core_if.is_redirect {
-                fetch_pc           = {core_if.next_pc[XLEN - 1:3], 3'b0};
-                fetch_requested    = 0;
-                fetch_pc_requested = 0;
+                if core_if.redirect_fetch_now && prediction_addr == redirect_addr && mem_if.valid && mem_if.ready {
+                    fetch_pc           = redirect_addr + 8;
+                    fetch_requested    = 1;
+                    fetch_pc_requested = redirect_addr;
+                } else {
+                    fetch_pc           = redirect_addr;
+                    fetch_requested    = 0;
+                    fetch_pc_requested = 0;
+                }
             } else {
                 if fetch_requested {
                     if mem_if.rvalid {

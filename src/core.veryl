@@ -49,14 +49,19 @@ module core (
     var alu_redirect          : logic;
     var csr_redirect          : logic;
 
-    var prediction_redirect: logic;
-    var ids_imm            : UIntX;
-    var ids_pred_target    : Addr ;
+    var prediction_redirect : logic;
+    var prediction_fetch_now: logic;
+    var ids_imm             : UIntX;
+    var ids_pred_target     : Addr ;
 
     let frontend_redirect: logic = control_hazard || fencei_redirect || prediction_redirect;
     var alu_next_pc      : Addr ;
     always_comb {
         i_membus.is_redirect = frontend_redirect;
+        // 予測fetch要求はEX段の訂正redirectから組合せ的に独立させる
+        // 両者が同時ならこの要求は捨てて次サイクルに訂正先を要求する
+        i_membus.redirect_fetch_now = prediction_fetch_now;
+        i_membus.redirect_fetch_pc  = ids_pred_target;
 
         if control_hazard {
             i_membus.next_pc = control_hazard_pc_next;
@@ -94,8 +99,9 @@ module core (
     let ids_pc: Addr = i_membus.raddr;
 
     always_comb {
-        prediction_redirect = !control_hazard && ids_fire && ids_pred_taken;
-        ids_pred_target     = if ids_is_jalr ? btb_target : ids_pc + ids_imm;
+        prediction_redirect  = !control_hazard && ids_fire && ids_pred_taken;
+        prediction_fetch_now = ids_fire && ids_pred_taken;
+        ids_pred_target      = if ids_is_jalr ? btb_target : ids_pc + ids_imm;
     }
 
     inst decoder: inst_decoder (
