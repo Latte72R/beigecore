@@ -209,6 +209,20 @@ def main():
                 print(f"konata.py: commit for unknown ROB tag {tag}", file=sys.stderr)
         elif kind == "R":
             redirect_kind = fields[0]
+            prediction_request = None
+            prediction_addr = None
+            if redirect_kind == "PRED":
+                # A predicted target can be requested in the same cycle as
+                # the redirect.  Q is processed before R, so move that
+                # request into the new epoch instead of flushing it with the
+                # old frontend state.
+                prediction_addr = number(fields[3]) & ~7
+                candidates = requests[(epoch, prediction_addr)]
+                for index in range(len(candidates) - 1, -1, -1):
+                    if candidates[index]["cycle"] == current_cycle:
+                        prediction_request = candidates.pop(index)
+                        break
+
             kill(frontend, current_cycle)
             if redirect_kind != "PRED":
                 kill(execute, current_cycle)
@@ -227,6 +241,10 @@ def main():
                     )
             epoch += 1
             outstanding.clear()
+            if prediction_request is not None:
+                requests[(epoch, prediction_addr)].append(prediction_request)
+                if prediction_request["response"] is None:
+                    outstanding[prediction_addr].append(prediction_request)
 
     # A finite trace may stop with instructions still in the frontend.
     last_cycle = raw_events[-1][0] if raw_events else 0
