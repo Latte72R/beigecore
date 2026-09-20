@@ -9,6 +9,9 @@ module core (
     led     : output  UIntX               ,
     aclint  : modport aclint_if::slave    ,
 ) {
+    inst memu_bus    : core_data_if;
+    inst storebuf_bus: core_data_if;
+
     // (EX, MEM) -> WB の Reorder Buffer
     var rob_allocate_valid: logic         ;
     var rob_allocate_ready: logic         ;
@@ -53,22 +56,32 @@ module core (
     var prediction_fetch_now: logic;
     var ids_imm             : UIntX;
     var ids_pred_target     : Addr ;
+    var bimodal_pred_taken  : logic;
+    var bimodal_pred_valid  : logic;
+    var btb_hit             : logic;
+    var btb_target          : Addr ;
 
-    let frontend_redirect: logic = control_hazard || fencei_redirect || prediction_redirect;
+    let frontend_redirect: logic = rob_rollback_request || csr_redirect || fencei_redirect;
     var alu_next_pc      : Addr ;
     always_comb {
         i_membus.is_redirect = frontend_redirect;
         // 予測fetch要求はEX段の訂正redirectから組合せ的に独立させる
         // 両者が同時ならこの要求は捨てて次サイクルに訂正先を要求する
-        i_membus.redirect_fetch_now = prediction_fetch_now;
-        i_membus.redirect_fetch_pc  = ids_pred_target;
+        i_membus.redirect_fetch_now       = prediction_fetch_now;
+        i_membus.redirect_fetch_pc        = ids_pred_target;
+        i_membus.prediction_bimodal_taken = bimodal_pred_taken;
+        i_membus.prediction_bimodal_valid = bimodal_pred_valid;
+        i_membus.prediction_btb_hit       = btb_hit;
+        i_membus.prediction_btb_target    = btb_target;
 
-        if control_hazard {
+        if csr_redirect {
             i_membus.next_pc = control_hazard_pc_next;
+        } else if rob_rollback_request {
+            i_membus.next_pc = rob_rollback_request_pc;
         } else if fencei_redirect {
             i_membus.next_pc = alu_next_pc;
         } else {
-            i_membus.next_pc = ids_pred_target;
+            i_membus.next_pc = 0;
         }
     }
 
@@ -81,27 +94,16 @@ module core (
     var ids_ctrl      : InstCtrl     ;
     var ids_expt      : ExceptionInfo;
 
-    var bimodal_pred_taken: logic;
-    var bimodal_pred_valid: logic;
-
-    let ids_btfnt_taken      : logic = ids_imm[msb]; // 負のoffsetならbackward
-    let ids_branch_pred_taken: logic = if bimodal_pred_valid ? bimodal_pred_taken : ids_btfnt_taken;
-
-    var btb_hit   : logic;
-    var btb_target: Addr ;
-
-    let ids_is_jal : logic = ids_ctrl.is_jump && ids_ctrl.itype == InstType::J;
     let ids_is_jalr: logic = ids_ctrl.is_jump && ids_ctrl.itype == InstType::I;
 
-    let ids_pred_taken: logic = ids_inst_valid
-        && (ids_is_jal || (ids_is_jalr && btb_hit) || (inst_is_br(ids_ctrl) && ids_branch_pred_taken));
+    let ids_pred_taken: logic = i_membus.prediction_taken;
 
     let ids_pc: Addr = i_membus.raddr;
 
     always_comb {
-        prediction_redirect  = !control_hazard && ids_fire && ids_pred_taken;
-        prediction_fetch_now = ids_fire && ids_pred_taken;
-        ids_pred_target      = if ids_is_jalr ? btb_target : ids_pc + ids_imm;
+        prediction_redirect  = i_membus.prediction_redirect;
+        prediction_fetch_now = 0;
+        ids_pred_target      = i_membus.prediction_target;
     }
 
     inst decoder: inst_decoder (
@@ -252,6 +254,19 @@ module core (
     var memu_active_entry  : euq_type;
     var memu_active_addr   : Addr    ;
     var memu_active_rs2    : UIntX   ;
+    var memu_forward_valid : logic   ;
+    var memu_forward_data  : UIntX   ;
+
+    // Load address / Store Buffer CAM pipeline stage.  The CAM result is
+    // captured here so it never drives the data-memory request combinationally.
+    var load_stage_valid        : logic   ;
+    var load_stage_entry        : euq_type;
+    var load_stage_addr         : Addr    ;
+    var load_stage_blocked      : logic   ;
+    var load_stage_forward_valid: logic   ;
+    var load_stage_forward_data : UIntX   ;
+    var load_stage_start        : logic   ;
+    var load_direct_start       : logic   ;
 
     var memu_input_ctrl   : InstCtrl;
     var memu_input_addr   : Addr    ;
@@ -262,6 +277,29 @@ module core (
     var memu_done         : logic   ;
     var memu_response_done: logic   ;
     var memu_killed       : logic   ;
+
+    var storebuf_wready       : logic   ;
+    var storebuf_wvalid       : logic   ;
+    var storebuf_commit_valid : logic   ;
+    var storebuf_commit_done  : logic   ;
+    var storebuf_commit_busy  : logic   ;
+    var storebuf_head_valid   : logic   ;
+    var storebuf_head_tag     : RobTag  ;
+    var storebuf_load_blocked : logic   ;
+    var storebuf_forward_valid: logic   ;
+    var storebuf_forward_data : UIntX   ;
+    var loadu_addr            : Addr    ;
+    var loadu_forward_complete: logic   ;
+    var memory_complete_entry : euq_type;
+
+    let load_has_older_store      : logic = storeu_oldest_valid && (storeu_oldest_data.rob_tag - rob_head_tag)
+        <: (loadu_rdata.rob_tag - rob_head_tag);
+    let storebuf_has_older_store  : logic = storebuf_head_valid && (storebuf_head_tag - rob_head_tag)
+        <: (loadu_rdata.rob_tag - rob_head_tag);
+    let load_forward_valid        : logic = storebuf_has_older_store && storebuf_forward_valid;
+    let load_forward_data         : UIntX = storebuf_forward_data;
+    let load_stage_has_older_store: logic = storebuf_head_valid && (storebuf_head_tag - rob_head_tag)
+        <: (load_stage_entry.rob_tag - rob_head_tag);
 
     var mdu_wready       : logic   ;
     var mdu_wvalid       : logic   ;
@@ -283,10 +321,6 @@ module core (
     var csru_rdata   : euq_type;
     var csru_grant   : logic   ;
     var csru_complete: logic   ;
-
-    var csru_active         : logic   ;
-    var csru_active_entry   : euq_type;
-    var csru_active_rs1_data: UIntX   ;
 
     var dispatch_wrs1ready: logic;
     var dispatch_wrs2ready: logic;
@@ -590,31 +624,129 @@ module core (
             memu_input_ctrl = memu_active_entry.ctrl;
             memu_input_addr = memu_active_addr;
             memu_input_rs2  = memu_active_rs2;
-        } else if loadu_grant {
-            memu_input_ctrl = loadu_rdata.ctrl;
-            memu_input_addr = loadu_read_data + loadu_rdata.imm;
+        } else if load_stage_start {
+            memu_input_ctrl = load_stage_entry.ctrl;
+            memu_input_addr = load_stage_addr;
             memu_input_rs2  = 0;
-        } else if storeu_grant {
-            memu_input_ctrl = storeu_rdata.ctrl;
-            memu_input_addr = storeu_read1_data + storeu_rdata.imm;
-            memu_input_rs2  = storeu_read2_data;
+        } else if load_direct_start {
+            memu_input_ctrl = loadu_rdata.ctrl;
+            memu_input_addr = loadu_addr;
+            memu_input_rs2  = 0;
         }
     }
 
     inst memu: memunit (
-        clk   : clk                                       ,
-        rst   : rst                                       ,
-        valid : memu_active || loadu_grant || storeu_grant,
-        ctrl  : memu_input_ctrl                           ,
-        addr  : memu_input_addr                           ,
-        rs2   : memu_input_rs2                            ,
-        rdata : memu_result                               ,
-        stall : memu_stall                                ,
-        done  : memu_done                                 ,
-        membus: d_membus                                  ,
+        clk   : clk                                                 ,
+        rst   : rst                                                 ,
+        valid : memu_active || load_stage_start || load_direct_start,
+        ctrl  : memu_input_ctrl                                     ,
+        addr  : memu_input_addr                                     ,
+        rs2   : memu_input_rs2                                      ,
+        rdata : memu_result                                         ,
+        stall : memu_stall                                          ,
+        done  : memu_done                                           ,
+        membus: memu_bus                                            ,
     );
 
+    inst storebuf: store_buffer (
+        clk                ,
+        rst                ,
+        flush: csr_redirect,
+
+        squash     : rob_rollback_request     ,
+        squash_head: rob_rollback_request_head,
+        squash_tag : rob_rollback_request_tag ,
+
+        wvalid  : storebuf_wvalid  ,
+        wready  : storebuf_wready  ,
+        wdata   : storeu_rdata     ,
+        rs1_data: storeu_read1_data,
+        rs2_data: storeu_read2_data,
+
+        load_check_valid  : loadu_rvalid && !load_has_older_store && !memu_active && !load_stage_valid,
+        load_addr         : loadu_addr                                                                ,
+        load_funct3       : loadu_rdata.ctrl.funct3                                                   ,
+        load_head         : rob_head_tag                                                              ,
+        load_tag          : loadu_rdata.rob_tag                                                       ,
+        load_blocked      : storebuf_load_blocked                                                     ,
+        load_forward_valid: storebuf_forward_valid                                                    ,
+        load_forward_data : storebuf_forward_data                                                     ,
+
+        commit_valid: storebuf_commit_valid                    ,
+        commit_allow: !rob_rollback_busy && !rob_rollback_start,
+        commit_done : storebuf_commit_done                     ,
+        commit_busy : storebuf_commit_busy                     ,
+        head_valid  : storebuf_head_valid                      ,
+        head_tag    : storebuf_head_tag                        ,
+        membus      : storebuf_bus                             ,
+    );
+
+    // Load用MEMUと、ROB headで書き出すStore BufferでD-portを共有する。
+    let storebus_selected: logic = storebuf_commit_busy;
+    always_comb {
+        if storebus_selected {
+            d_membus.valid  = storebuf_bus.valid;
+            d_membus.addr   = storebuf_bus.addr;
+            d_membus.wen    = storebuf_bus.wen;
+            d_membus.wdata  = storebuf_bus.wdata;
+            d_membus.wmask  = storebuf_bus.wmask;
+            d_membus.is_amo = storebuf_bus.is_amo;
+            d_membus.aq     = storebuf_bus.aq;
+            d_membus.rl     = storebuf_bus.rl;
+            d_membus.amoop  = storebuf_bus.amoop;
+            d_membus.funct3 = storebuf_bus.funct3;
+        } else {
+            d_membus.valid  = memu_bus.valid;
+            d_membus.addr   = memu_bus.addr;
+            d_membus.wen    = memu_bus.wen;
+            d_membus.wdata  = memu_bus.wdata;
+            d_membus.wmask  = memu_bus.wmask;
+            d_membus.is_amo = memu_bus.is_amo;
+            d_membus.aq     = memu_bus.aq;
+            d_membus.rl     = memu_bus.rl;
+            d_membus.amoop  = memu_bus.amoop;
+            d_membus.funct3 = memu_bus.funct3;
+        }
+
+        memu_bus.ready      = d_membus.ready && !storebus_selected;
+        memu_bus.rvalid     = d_membus.rvalid && !storebus_selected;
+        memu_bus.rdata      = d_membus.rdata;
+        storebuf_bus.ready  = d_membus.ready && storebus_selected;
+        storebuf_bus.rvalid = d_membus.rvalid && storebus_selected;
+        storebuf_bus.rdata  = d_membus.rdata;
+    }
+
     var minstret: UInt64;
+
+    always_ff {
+        if_reset {
+            load_stage_valid         = 0;
+            load_stage_entry         = '0;
+            load_stage_addr          = 0;
+            load_stage_blocked       = 0;
+            load_stage_forward_valid = 0;
+            load_stage_forward_data  = 0;
+        } else if backend_redirect {
+            load_stage_valid         = 0;
+            load_stage_entry         = '0;
+            load_stage_addr          = 0;
+            load_stage_blocked       = 0;
+            load_stage_forward_valid = 0;
+            load_stage_forward_data  = 0;
+        } else if load_stage_start {
+            load_stage_valid = 0;
+        } else if loadu_grant && storebuf_has_older_store {
+            load_stage_valid         = 1;
+            load_stage_entry         = loadu_rdata;
+            load_stage_addr          = loadu_addr;
+            load_stage_blocked       = storebuf_has_older_store && storebuf_load_blocked;
+            load_stage_forward_valid = load_forward_valid;
+            load_stage_forward_data  = load_forward_data;
+        } else if rob_rollback_request && load_stage_valid && (load_stage_entry.rob_tag - rob_rollback_request_head)
+            >: (rob_rollback_request_tag - rob_rollback_request_head) {
+            load_stage_valid = 0;
+        }
+    }
 
     always_ff {
         if_reset {
@@ -623,6 +755,8 @@ module core (
             memu_active_entry   = '0;
             memu_active_addr    = 0;
             memu_active_rs2     = 0;
+            memu_forward_valid  = 0;
+            memu_forward_data   = 0;
             memu_killed         = 0;
         } else if backend_redirect {
             memu_active         = 0;
@@ -630,26 +764,33 @@ module core (
             memu_active_entry   = '0;
             memu_active_addr    = 0;
             memu_active_rs2     = 0;
+            memu_forward_valid  = 0;
+            memu_forward_data   = 0;
             memu_killed         = 0;
         } else if memu_response_done {
             // killされた命令でもMEMU自体は完了させて解放する
-            memu_active = 0;
-            memu_killed = 0;
-        } else if loadu_grant {
-            // Issue Queueから取り出した命令をMEMU内で保持する
+            memu_active        = 0;
+            memu_forward_valid = 0;
+            memu_killed        = 0;
+        } else if load_stage_start {
+            // Address/CAM段を通過したLoadをMEMU内で保持する。
+            memu_active         = 1;
+            memu_active_is_load = 1;
+            memu_active_entry   = load_stage_entry;
+            memu_active_addr    = load_stage_addr;
+            memu_active_rs2     = 0;
+            memu_forward_valid  = load_stage_forward_valid;
+            memu_forward_data   = load_stage_forward_data;
+            memu_killed         = 0;
+        } else if load_direct_start {
+            // Store Buffer CAMが不要な通常Loadは余分なbubbleなしでMEMUへ進める。
             memu_active         = 1;
             memu_active_is_load = 1;
             memu_active_entry   = loadu_rdata;
-            memu_active_addr    = loadu_read_data + loadu_rdata.imm;
+            memu_active_addr    = loadu_addr;
             memu_active_rs2     = 0;
-            memu_killed         = 0;
-        } else if storeu_grant {
-            // Issue Queueから取り出した命令をMEMU内で保持する
-            memu_active         = 1;
-            memu_active_is_load = 0;
-            memu_active_entry   = storeu_rdata;
-            memu_active_addr    = storeu_read1_data + storeu_rdata.imm;
-            memu_active_rs2     = storeu_read2_data;
+            memu_forward_valid  = 0;
+            memu_forward_data   = 0;
             memu_killed         = 0;
         } else if rob_rollback_request && memu_active && (memu_active_entry.rob_tag - rob_rollback_request_head)
             >: (rob_rollback_request_tag - rob_rollback_request_head) {
@@ -658,8 +799,6 @@ module core (
             memu_killed = 1;
         }
     }
-
-    let storeu_at_head: logic = storeu_rvalid && rob_head_valid && rob_head_tag == storeu_rdata.rob_tag;
 
     ///////////////////////////////// EX Stage (CSRU) /////////////////////////////////
 
@@ -671,64 +810,54 @@ module core (
     let csru_at_head: logic = csru_rvalid && rob_head_valid && rob_head_tag == csru_rdata.rob_tag;
 
     inst csru: csrunit (
-        clk                                       ,
-        rst                                       ,
-        valid      : csru_active                  ,
-        pc         : csru_active_entry.addr       ,
-        inst_bits  : csru_active_entry.bits       ,
-        ctrl       : csru_active_entry.ctrl       ,
-        expt_info  : csru_active_entry.expt       ,
-        rd_areg    : csru_active_entry.bits[11:7] ,
-        csr_addr   : csru_active_entry.bits[31:20],
-        rs1_areg   : csru_active_entry.bits[19:15],
-        rs1_data   : csru_active_rs1_data         ,
-        can_intr   : 0                            , // 当面は割り込みなし
-        rdata      : csru_result                  ,
-        mode       : csru_priv_mode               ,
-        raise_trap : csru_raise_trap              ,
-        trap_vector: csru_trap_vector             ,
-        trap_return: csru_trap_return             ,
-        minstret                                  ,
-        led                                       ,
-        aclint                                    ,
+        clk                                ,
+        rst                                ,
+        valid      : csru_grant            ,
+        pc         : csru_rdata.addr       ,
+        inst_bits  : csru_rdata.bits       ,
+        ctrl       : csru_rdata.ctrl       ,
+        expt_info  : csru_rdata.expt       ,
+        rd_areg    : csru_rdata.bits[11:7] ,
+        csr_addr   : csru_rdata.bits[31:20],
+        rs1_areg   : csru_rdata.bits[19:15],
+        rs1_data   : csru_read_data        ,
+        can_intr   : 0                     , // 当面は割り込みなし
+        rdata      : csru_result           ,
+        mode       : csru_priv_mode        ,
+        raise_trap : csru_raise_trap       ,
+        trap_vector: csru_trap_vector      ,
+        trap_return: csru_trap_return      ,
+        minstret                           ,
+        led                                ,
+        aclint                             ,
     );
-
-    always_ff {
-        if_reset {
-            csru_active          = 0;
-            csru_active_entry    = '0;
-            csru_active_rs1_data = 0;
-        } else if backend_redirect {
-            csru_active          = 0;
-            csru_active_entry    = '0;
-            csru_active_rs1_data = 0;
-        } else if csru_complete {
-            csru_active = 0;
-        } else if csru_grant {
-            csru_active          = 1;
-            csru_active_entry    = csru_rdata;
-            csru_active_rs1_data = csru_read_data;
-        }
-    }
 
     ///////////////////////////////// EX Stage (Issue / Completion) /////////////////////////////////
 
-    let load_has_older_store: logic = storeu_oldest_valid && (storeu_oldest_data.rob_tag - rob_head_tag)
-        <: (loadu_rdata.rob_tag - rob_head_tag);
+    let store_is_oldest: logic = storeu_oldest_valid && storeu_rvalid && storeu_oldest_data.rob_tag
+        == storeu_rdata.rob_tag;
 
     // issue_queueのrvalidは内部のでソースレジスタがreadyなentryだけを選んでいる
     let load_candidate : logic = loadu_rvalid && !load_has_older_store;
-    let store_candidate: logic = storeu_rvalid && storeu_at_head;
+    let store_candidate: logic = store_is_oldest;
 
     always_comb {
-        // Storeはprecise state維持のためROB先頭のみ
-        storeu_grant = !memu_active && store_candidate;
-        // older Storeが存在しないLoadはROB先頭より前でも実行可能
-        loadu_grant = !memu_active && !storeu_grant && load_candidate;
+        loadu_addr = loadu_read_data + loadu_rdata.imm;
+        // StoreはStore間の順序を保ったまま、ROB headより前にBufferへ退避する。
+        storeu_grant = !memu_active && store_candidate && storebuf_wready;
+        // 未解決のolder StoreがなければLoadをaddress/CAM段へ進める。
+        loadu_grant = !memu_active && !load_stage_valid && !storeu_grant && !storebuf_commit_busy
+            && !storebuf_commit_valid && load_candidate;
+        // Full-overlap forwarding and ordinary loads proceed after one explicit
+        // address/CAM stage. Partial overlap waits until every older buffered
+        // Store has drained, then reads the merged architectural memory value.
+        load_stage_start  = load_stage_valid && !memu_active && !storebuf_commit_busy && !storebuf_commit_valid
+            && (!load_stage_blocked || !load_stage_has_older_store);
+        load_direct_start = loadu_grant && !storebuf_has_older_store;
         // MDUがidleなら実行開始・継続
         mdu_grant = mdu_rvalid && mdu_ready && !mdu_busy;
         // CSRはROB先頭かつoperand readyなら実行
-        csru_grant = !csru_active && csru_rvalid && csru_at_head;
+        csru_grant = csru_rvalid && csru_at_head;
         // ALUは(fence_iでないまたはROB先頭)かつoperand readyなら実行開始・継続
         alu_grant = alu_rvalid && (!alu_is_fence_i || alu_at_head);
     }
@@ -749,12 +878,15 @@ module core (
                 >: (rob_rollback_request_tag - rob_rollback_request_head));
 
         // killされた命令は完了扱いにしない
-        mdu_complete  = mdu_response_done && !mdu_killed_now;
-        memu_complete = memu_response_done && !memu_killed_now;
+        mdu_complete           = mdu_response_done && !mdu_killed_now;
+        memu_complete          = memu_response_done && !memu_killed_now;
+        loadu_forward_complete = 0;
 
-        loadu_complete  = memu_complete && memu_active_is_load;
-        storeu_complete = memu_complete && !memu_active_is_load;
-        csru_complete   = csru_active;
+        loadu_complete  = memu_complete;
+        storeu_complete = storebuf_wvalid;
+        csru_complete   = csru_grant;
+
+        memory_complete_entry = if storeu_complete ? storeu_rdata : memu_active_entry;
     }
 
     always_comb {
@@ -765,12 +897,15 @@ module core (
         storeu_rready = storeu_grant;
         csru_rready   = csru_grant;
 
-        loadu_write_valid = loadu_complete && memu_active_entry.ctrl.is_load && memu_active_entry.bits[11:7] != 0;
-        loadu_write_addr  = if memu_active_is_load ? memu_active_entry.rd_preg : 0;
-        loadu_write_data  = if memu_active_is_load ? memu_result : 0;
+        storebuf_wvalid = storeu_grant;
 
-        csru_write_valid = csru_complete && csru_active_entry.ctrl.rwb_en && csru_active_entry.bits[11:7] != 0;
-        csru_write_addr  = csru_active_entry.rd_preg;
+        loadu_write_valid = loadu_complete && memory_complete_entry.ctrl.is_load && memory_complete_entry.bits[11:7]
+            != 0;
+        loadu_write_addr  = if loadu_complete ? memory_complete_entry.rd_preg : 0;
+        loadu_write_data  = if memu_forward_valid ? memu_forward_data : memu_result;
+
+        csru_write_valid = csru_complete && csru_rdata.ctrl.rwb_en && csru_rdata.bits[11:7] != 0;
+        csru_write_addr  = csru_rdata.rd_preg;
         csru_write_data  = csru_result;
 
         mdu_write_valid = mdu_complete && mdu_active_entry.ctrl.rwb_en && mdu_active_entry.bits[11:7] != 0;
@@ -857,8 +992,16 @@ module core (
 
     always_comb {
         // WB -> END
-        rob_commit_ready = !rob_rollback_busy && !rob_rollback_start;
+        rob_commit_ready = !rob_rollback_busy && !rob_rollback_start
+            && (!rob_commit_valid || !inst_is_store(rob_commit_data.ctrl) || storebuf_commit_done);
+    }
 
+    always_comb {
+        storebuf_commit_valid = rob_commit_valid && inst_is_store(rob_commit_data.ctrl) && storebuf_head_valid
+            && storebuf_head_tag == rob_head_tag && !rob_rollback_busy && !rob_rollback_start && !memu_active;
+    }
+
+    always_comb {
         // Free Listはrollback優先
         flist_wvalid = rob_rollback_restores_rd || rob_commit_fire;
         if rob_rollback_restores_rd {
@@ -902,9 +1045,9 @@ module core (
                     $display(
                         "K\t%0d\tC\t%0d\t%h\t%h",
                         trace_cycle,
-                        memu_active_entry.rob_tag,
-                        memu_active_entry.addr,
-                        memu_active_entry.bits,
+                        memory_complete_entry.rob_tag,
+                        memory_complete_entry.addr,
+                        memory_complete_entry.bits,
                     );
                 }
                 if mdu_complete {
@@ -920,9 +1063,9 @@ module core (
                     $display(
                         "K\t%0d\tC\t%0d\t%h\t%h",
                         trace_cycle,
-                        csru_active_entry.rob_tag,
-                        csru_active_entry.addr,
-                        csru_active_entry.bits,
+                        csru_rdata.rob_tag,
+                        csru_rdata.addr,
+                        csru_rdata.bits,
                     );
                 }
                 // Register writeの有無にかかわらず、すべてのROB commitを記録する
@@ -953,8 +1096,6 @@ module core (
                         alu_rdata.rob_tag,
                         rob_head_tag,
                     );
-                } else if prediction_redirect {
-                    $display("K\t%0d\tR\tPRED\t%h\t%h\t%h", trace_cycle, ids_pc, ids_inst_bits, ids_pred_target);
                 }
                 trace_cycle += 1;
             }
@@ -967,9 +1108,9 @@ module core (
         clk  ,
         rst  ,
 
-        predict_pc   : ids_pc            ,
-        predict_taken: bimodal_pred_taken,
-        predict_valid: bimodal_pred_valid,
+        predict_pc   : i_membus.prediction_query_pc,
+        predict_taken: bimodal_pred_taken          ,
+        predict_valid: bimodal_pred_valid          ,
 
         update_valid: alu_rvalid && alu_rready && inst_is_br(alu_rdata.ctrl),
         update_pc   : alu_rdata.addr                                        ,
@@ -980,9 +1121,9 @@ module core (
         clk  ,
         rst  ,
 
-        predict_pc    : ids_pc    ,
-        predict_hit   : btb_hit   ,
-        predict_target: btb_target,
+        predict_pc    : i_membus.prediction_query_pc,
+        predict_hit   : btb_hit                     ,
+        predict_target: btb_target                  ,
 
         update_valid : alu_rvalid && alu_rready && alu_is_jalr,
         update_pc    : alu_rdata.addr                         ,
@@ -1176,13 +1317,13 @@ module core (
         complete0_tag  : alu_rdata.rob_tag,
 
         complete1_valid: loadu_complete || storeu_complete,
-        complete1_tag  : memu_active_entry.rob_tag        ,
+        complete1_tag  : memory_complete_entry.rob_tag    ,
 
         complete2_valid: mdu_complete            ,
         complete2_tag  : mdu_active_entry.rob_tag,
 
-        complete3_valid: csru_complete            ,
-        complete3_tag  : csru_active_entry.rob_tag,
+        complete3_valid: csru_complete     ,
+        complete3_tag  : csru_rdata.rob_tag,
 
         commit_valid: rob_commit_valid,
         commit_ready: rob_commit_ready,

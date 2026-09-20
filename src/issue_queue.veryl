@@ -2,8 +2,9 @@ import eei::*;
 import corectrl::*;
 
 module issue_queue #(
-    param ENTRY_COUNT: u32 = 4,
-    param INDEX_WIDTH: u32 = 2,
+    param ENTRY_COUNT  : u32   = 4   ,
+    param INDEX_WIDTH  : u32   = 2   ,
+    param ALLOW_REPLACE: logic = true,
 ) (
     clk  : input clock,
     rst  : input reset,
@@ -123,7 +124,7 @@ module issue_queue #(
     }
 
     always_comb {
-        wready       = count != ENTRY_COUNT as Count || (rvalid && rready);
+        wready       = count != ENTRY_COUNT as Count || (ALLOW_REPLACE && rvalid && rready);
         oldest_valid = count != 0;
         oldest_data  = entries[0].data;
     }

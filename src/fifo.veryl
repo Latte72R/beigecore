@@ -2,6 +2,7 @@ module fifo #(
     param DATA_TYPE    : type  = logic,
     param WIDTH        : u32   = 2    ,
     param ALLOW_REPLACE: logic = true ,
+    param FALL_THROUGH : logic = false,
 ) (
     clk       : input  clock        ,
     rst       : input  reset        ,
@@ -37,20 +38,22 @@ module fifo #(
             }
         }
     } else {
-        type Ptr        = logic<WIDTH>;
-        var head      : Ptr         ;
-        var tail      : Ptr         ;
-        let tail_plus1: Ptr          = tail + 1 as Ptr;
-        let tail_plus2: Ptr          = tail + 2 as Ptr;
-        let full      : logic        = tail_plus1 == head;
-        let pop       : logic        = rready && rvalid;
+        type Ptr          = logic<WIDTH>;
+        var head        : Ptr         ;
+        var tail        : Ptr         ;
+        let tail_plus1  : Ptr          = tail + 1 as Ptr;
+        let tail_plus2  : Ptr          = tail + 2 as Ptr;
+        let full        : logic        = tail_plus1 == head;
+        let stored_valid: logic        = head != tail;
+        let bypass      : logic        = FALL_THROUGH && !stored_valid && wvalid && rready;
+        let pop         : logic        = rready && stored_valid;
 
         #[sv("syn_ramstyle=\"registers\"")]
         var mem: DATA_TYPE [2 ** WIDTH];
 
         always_comb {
-            rvalid     = head != tail;
-            rdata      = mem[head];
+            rvalid     = stored_valid || (FALL_THROUGH && wvalid);
+            rdata      = if stored_valid ? mem[head] : wdata;
             wready     = !full || (ALLOW_REPLACE && pop); // 1要素を書き込める
             wready_two = !full && (tail_plus2 != head || pop); // 2要素を書き込める
         }
@@ -65,11 +68,11 @@ module fifo #(
                     head = 0;
                     tail = 0;
                 } else {
-                    if wready && wvalid {
+                    if wready && wvalid && !bypass {
                         mem[tail] = wdata;
                         tail      = tail + 1;
                     }
-                    if rready && rvalid {
+                    if pop {
                         head = head + 1;
                     }
                 }

@@ -223,7 +223,11 @@ def main():
                         prediction_request = candidates.pop(index)
                         break
 
-            kill(frontend, current_cycle)
+            # Prediction now happens when the branch enters the issue FIFO.
+            # At that point no younger wrong-path instruction has entered the
+            # frontend queue, so the branch and all older instructions remain.
+            if redirect_kind != "PRED":
+                kill(frontend, current_cycle)
             if redirect_kind != "PRED":
                 kill(execute, current_cycle)
             if redirect_kind == "BACKEND":

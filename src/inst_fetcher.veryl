@@ -20,8 +20,9 @@ module inst_fetcher (
     var fetch_fifo_rvalid: logic          ;
 
     inst fetch_fifo: fifo #(
-        DATA_TYPE: fetch_fifo_type,
-        WIDTH    : 2              ,
+        DATA_TYPE   : fetch_fifo_type,
+        WIDTH       : 2              ,
+        FALL_THROUGH: true           ,
     ) (
         clk                          ,
         rst                          ,
@@ -36,9 +37,11 @@ module inst_fetcher (
     );
 
     struct issue_fifo_type {
-        addr  : Addr ,
-        bits  : Inst ,
-        is_rvc: logic,
+        addr       : Addr ,
+        bits       : Inst ,
+        is_rvc     : logic,
+        pred_taken : logic,
+        pred_target: Addr ,
     }
 
     var issue_fifo_flush : logic          ;
@@ -50,8 +53,10 @@ module inst_fetcher (
     var issue_fifo_rvalid: logic          ;
 
     inst issue_fifo: fifo #(
-        DATA_TYPE: issue_fifo_type,
-        WIDTH    : 2              ,
+        DATA_TYPE    : issue_fifo_type,
+        WIDTH        : 2              ,
+        ALLOW_REPLACE: false          ,
+        FALL_THROUGH : true           ,
     ) (
         clk                      ,
         rst                      ,
@@ -89,6 +94,54 @@ module inst_fetcher (
         inst32: rvcc_inst32,
     );
 
+    let prediction_bits: Inst = if issue_pc_offset == 6 && issue_is_rdata_saved ?
+        {fetch_fifo_rdata.bits[15:0], issue_saved_bits}
+    : if rvcc_is_rvc ?
+        rvcc_inst32
+    :
+        case issue_pc_offset {
+            0      : fetch_fifo_rdata.bits[31:0],
+            2      : fetch_fifo_rdata.bits[47:16],
+            4      : fetch_fifo_rdata.bits[63:32],
+            default: 0,
+        }
+    ;
+    let prediction_pc          : Addr      = if issue_pc_offset == 6 && issue_is_rdata_saved ?
+        {issue_saved_addr[msb:3], issue_pc_offset}
+    :
+        {fetch_fifo_rdata.addr[msb:3], issue_pc_offset}
+    ;
+    let prediction_op          : logic<7>  = prediction_bits[6:0];
+    let prediction_imm_b_g     : logic<12> = {
+        prediction_bits[31], prediction_bits[7], prediction_bits[30:25], prediction_bits[11:8]
+    };
+    let prediction_imm_j_g     : logic<20> = {
+        prediction_bits[31], prediction_bits[19:12], prediction_bits[20], prediction_bits[30:21]
+    };
+    let prediction_imm_b       : UIntX     = {
+        prediction_bits[31] repeat XLEN - $bits(prediction_imm_b_g) - 1, prediction_imm_b_g, 1'b0
+    };
+    let prediction_imm_j       : UIntX     = {
+        prediction_bits[31] repeat XLEN - $bits(prediction_imm_j_g) - 1, prediction_imm_j_g, 1'b0
+    };
+    let prediction_is_jal      : logic     = prediction_op == OP_JAL;
+    let prediction_is_jalr     : logic     = prediction_op == OP_JALR;
+    let prediction_is_branch   : logic     = prediction_op == OP_BRANCH;
+    let prediction_branch_taken: logic     = if core_if.prediction_bimodal_valid ?
+        core_if.prediction_bimodal_taken
+    :
+        prediction_bits[31]
+    ;
+    let predicted_taken        : logic     = prediction_is_jal || (prediction_is_jalr && core_if.prediction_btb_hit)
+        || (prediction_is_branch && prediction_branch_taken);
+    let predicted_target       : Addr      = if prediction_is_jalr ?
+        core_if.prediction_btb_target
+    : if prediction_is_jal ?
+        prediction_pc + prediction_imm_j
+    :
+        prediction_pc + prediction_imm_b
+    ;
+
     always_ff {
         if_reset {
             issue_pc_offset      = 0;
@@ -96,8 +149,8 @@ module inst_fetcher (
             issue_saved_addr     = 0;
             issue_saved_bits     = 0;
         } else {
-            if core_if.is_redirect {
-                issue_pc_offset      = core_if.next_pc[2:0];
+            if core_if.is_redirect || core_if.prediction_redirect {
+                issue_pc_offset      = if core_if.is_redirect ? core_if.next_pc[2:0] : predicted_target[2:0];
                 issue_is_rdata_saved = 0;
             } else {
                 // offsetが6な32ビット命令の場合、
@@ -130,7 +183,7 @@ module inst_fetcher (
         issue_fifo_wvalid = 0;
         issue_fifo_wdata  = 0;
 
-        if !core_if.is_redirect && fetch_fifo_rvalid {
+        if fetch_fifo_rvalid {
             if offset == 6 {
                 // offsetが6な32ビット命令の場合、
                 // 命令は{rdata_next[15:0], rdata[63:48}になる
@@ -168,16 +221,24 @@ module inst_fetcher (
                 }
             }
         }
+        issue_fifo_wdata.pred_taken  = predicted_taken;
+        issue_fifo_wdata.pred_target = predicted_target;
     }
 
     // issue_fifo <-> core
+    let local_prediction_redirect: logic = !core_if.is_redirect && issue_fire && predicted_taken;
+
     always_comb {
-        issue_fifo_flush  = core_if.is_redirect;
-        issue_fifo_rready = core_if.rready;
-        core_if.rvalid    = issue_fifo_rvalid;
-        core_if.raddr     = issue_fifo_rdata.addr;
-        core_if.rdata     = issue_fifo_rdata.bits;
-        core_if.is_rvc    = issue_fifo_rdata.is_rvc;
+        issue_fifo_flush            = core_if.is_redirect;
+        issue_fifo_rready           = core_if.rready;
+        core_if.rvalid              = issue_fifo_rvalid;
+        core_if.raddr               = issue_fifo_rdata.addr;
+        core_if.rdata               = issue_fifo_rdata.bits;
+        core_if.is_rvc              = issue_fifo_rdata.is_rvc;
+        core_if.prediction_query_pc = prediction_pc;
+        core_if.prediction_taken    = issue_fifo_rdata.pred_taken;
+        core_if.prediction_target   = issue_fifo_rdata.pred_target;
+        core_if.prediction_redirect = local_prediction_redirect;
 
     }
 
@@ -187,7 +248,7 @@ module inst_fetcher (
     var fetch_pc_requested: Addr ;
 
     let redirect_addr  : Addr = {core_if.next_pc[XLEN - 1:3], 3'b0};
-    let prediction_addr: Addr = {core_if.redirect_fetch_pc[XLEN - 1:3], 3'b0};
+    let prediction_addr: Addr = {predicted_target[XLEN - 1:3], 3'b0};
 
     always_comb {
         mem_if.valid = 0;
@@ -196,7 +257,7 @@ module inst_fetcher (
         mem_if.wdata = 0;
         mem_if.wmask = 0;
 
-        if core_if.redirect_fetch_now {
+        if local_prediction_redirect {
             // Decode段の予測redirectだけは同じサイクルにtargetを要求する
             // 既存要求がある場合はその応答を受け取るサイクルに切り替える
             mem_if.valid = !fetch_requested || mem_if.rvalid;
@@ -212,7 +273,7 @@ module inst_fetcher (
 
     // memory -> fetch_fifo
     always_comb {
-        fetch_fifo_flush      = core_if.is_redirect;
+        fetch_fifo_flush      = core_if.is_redirect || local_prediction_redirect;
         fetch_fifo_wvalid     = fetch_requested && mem_if.rvalid;
         fetch_fifo_wdata.addr = fetch_pc_requested;
         fetch_fifo_wdata.bits = mem_if.rdata;
@@ -224,13 +285,13 @@ module inst_fetcher (
             fetch_requested    = 0;
             fetch_pc_requested = 0;
         } else {
-            if core_if.is_redirect {
-                if core_if.redirect_fetch_now && prediction_addr == redirect_addr && mem_if.valid && mem_if.ready {
-                    fetch_pc           = redirect_addr + 8;
+            if core_if.is_redirect || local_prediction_redirect {
+                if local_prediction_redirect && mem_if.valid && mem_if.ready {
+                    fetch_pc           = prediction_addr + 8;
                     fetch_requested    = 1;
-                    fetch_pc_requested = redirect_addr;
+                    fetch_pc_requested = prediction_addr;
                 } else {
-                    fetch_pc           = redirect_addr;
+                    fetch_pc           = if local_prediction_redirect ? prediction_addr : redirect_addr;
                     fetch_requested    = 0;
                     fetch_pc_requested = 0;
                 }
@@ -269,6 +330,15 @@ module inst_fetcher (
                 }
                 if issue_fire {
                     $display("K\t%0d\tF\t%h\t%h", trace_cycle, issue_fifo_wdata.addr, issue_fifo_wdata.bits);
+                }
+                if local_prediction_redirect {
+                    $display(
+                        "K\t%0d\tR\tPRED\t%h\t%h\t%h",
+                        trace_cycle,
+                        issue_fifo_wdata.addr,
+                        issue_fifo_wdata.bits,
+                        predicted_target,
+                    );
                 }
                 trace_cycle += 1;
             }
